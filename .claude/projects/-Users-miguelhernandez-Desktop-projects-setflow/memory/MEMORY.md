@@ -1,0 +1,6 @@
+- [User profile](user_profile.md) — Miguel, building portfolio project, wants to understand and review everything
+- [Confirm before push/merge](feedback_confirm_before_push.md) — always show file list and get approval before git push or merge
+- [No credentials in repo](feedback_no_credentials_in_repo.md) — never commit API keys, secrets, or credentials; use .env (gitignored) only
+- [Clean up branches after merge](feedback_cleanup_branches.md) — delete local and remote feature branches after every merge to main
+- [Phase 0 progress](project_phase0_progress.md) — issues #2 done, #3 in review, #4 and #5 next (can parallel)
+- [Local dev setup](reference_local_setup.md) — Python 3.12 via Homebrew, Docker Desktop, gh auth

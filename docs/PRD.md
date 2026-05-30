@@ -44,16 +44,75 @@ The core intelligence is **sequence awareness**: three layers of embeddings (tra
 
 ### Data Sources and Ingestion Pipeline
 
-- **1001tracklists** is the primary source for set-level intelligence: track ordering within DJ sets, which DJs play which tracks, venue/date context, and transition patterns. Scraped with httpx + exponential backoff, cached to disk as a one-time data collection effort (not a live pipeline).
-- **Spotify Web API** is the primary source for track-level metadata: BPM (tempo), key + mode, energy, duration, popularity, ISRC, and Spotify track ID. Tracks are resolved to Spotify URIs during ingestion so playlist delivery is a single API call later.
-- **Discogs API** provides granular subgenre and style tags (e.g., "minimal deep house" vs "house") and label information. Labels are a strong vibe signal in electronic music (Innervisions vs Drumcode). Track-level resolution via fuzzy matching (~70-80% hit rate), falling back to label-level style tags for unresolved tracks.
-- **MusicBrainz** provides ISRC codes for canonical track identity and deduplication across sources.
+#### Tracklist Sources (set-level intelligence)
+
+- **1001tracklists** is the primary source for set-level intelligence: track ordering within DJ sets, which DJs play which tracks, venue/date context, and transition patterns. Scraped with `curl_cffi` (mimics browser TLS fingerprints) + `cloudscraper` for Cloudflare bypass, with Playwright as fallback. Cached to `data/cache/` as a one-time data collection effort (not a live pipeline). 10-30 second delays between requests, run overnight.
+- **MixesDB** is a supplementary tracklist source accessed via its MediaWiki API. Community-curated, high data quality, explicit completeness categories. No Cloudflare, no rate limiting drama.
+- **Mixcloud API** provides tracklists with start times for radio shows and mixes. Free REST API, no auth required for reads. Best for well-documented radio shows (Essential Mix, Drumcode Radio, etc.).
+- **djmix dataset** (HuggingFace, mir-aidj) provides a bootstrap corpus of ~89 mixes, 747 tracks, with transition annotations including cue points and transition lengths. Downloaded immediately to validate pipeline before scraping.
+- **Set types:** All three formats are ingested — live sets, radio shows, and studio mixtapes — each tagged with `set_type` in the database. Guest mixes on radio shows are filtered out (they represent the guest DJ's sequencing, not the host's).
+
+#### DJ Roster (30 artists, 6 genres)
+
+| Genre | Artists |
+|-------|---------|
+| **Tech House** | Chris Lake*, PAWSA, Mau P, Luke Dean, Malive |
+| **Melodic House & Techno** | Anyma, ARTBAT*, Argy, Cassian, Layton Giordani |
+| **House** | HUGEL*, Chris Lorenzo, Prospa, Max Styler, Sidepiece |
+| **Progressive House** | Guy J, Hernan Cattaneo*, Spencer Brown, Marsh, Cristoph |
+| **Organic / Indie Electronic** | Lane 8*, Rufus Du Sol, Bob Moses, Sebastien Leger, Volen Sentir |
+| **Techno (Peak Time / Driving)** | Charlotte de Witte, Adam Beyer*, Space 92, Amelie Lens, Marie Vaunt |
+
+\* = seed DJ for pipeline validation (one per genre). Seed DJs chosen for genre centrality — maximum track overlap with other DJs in their genre.
+
+**Phased scraping:** Start with 6 seed DJs, 5-8 sets each (~40 sets, ~1,000 transitions) to validate the full pipeline. Then scale to 10 sets × 30 artists.
+
+#### Track Resolution
+
+- **Spotify Web API** resolves tracks to Spotify URIs and ISRCs via search. Playlist delivery is a single API call with a list of URIs. **Note:** Spotify deprecated their Audio Features and Audio Analysis endpoints in November 2024 — BPM, key, energy, danceability are no longer available from Spotify for new apps. Spotify is used only for track search, URI lookup, ISRC retrieval, and playlist creation.
+- **MusicBrainz** provides ISRC-based deduplication across sources and MusicBrainz Recording IDs (MBIDs) for cross-referencing with AcousticBrainz.
 - Track normalization uses a `canonicalize_track()` function with `rapidfuzz` for fuzzy matching across naming variants ("Original Mix", "Remix", label suffixes).
-- Target: 8-10 DJs spanning subgenres (melodic/deep, peak-time techno, groovy/funky, eclectic), 15-20 sets each, ~150-200 total sets. DJ selection TBD.
+
+#### Enrichment Pipeline (metadata-only for v1)
+
+Three pre-built datasets provide BPM, key, and subgenre data without scraping or deprecated APIs:
+
+1. **Beatport 10M+ Tracks dataset** (Kaggle, mcfurland) — 10M+ Beatport tracks with genre, subgenre, BPM, key, and label. 4.7M tracks also have Spotify audio features (pre-deprecation snapshot). PostgreSQL dump format, joined via ISRC. ODbL license.
+2. **NaturNestAI/electronic-music-knowledge** (HuggingFace) — 18.3M tracks with Discogs style arrays (`styles_json`), subgenre, label, artist, year, and country. Includes an 832-genre taxonomy with BPM ranges and energy levels per genre, plus a genre evolution graph. CC0 license, Parquet format. Source: Discogs April 2026 + Ishkur's Guide to Electronic Music.
+3. **AcousticBrainz CSV dumps** — ~29.5M submissions with Essentia-extracted BPM, key, key_scale, and danceability. Keyed by MusicBrainz Recording ID. CC0 license. Project discontinued 2022 but downloads still live — download ASAP.
+
+**API-based gap filling:**
+- **Discogs API** provides style tags and label info for tracks not found in the datasets (~60 req/min, `python3-discogs-client`). Track-level resolution via fuzzy matching (~70-80% hit rate), falling back to label-level style tags for unresolved tracks.
+- **Label → subgenre lookup table** — a manually curated mapping of ~200-300 top electronic labels to Beatport genres. Labels are the strongest subgenre signal in electronic music (Afterlife → Melodic Techno, Drumcode → Peak Time Techno, Anjunadeep → Progressive House).
+
+**Canonical taxonomy:** Beatport's genre categories are the target taxonomy. All Discogs styles are mapped to Beatport genres via a lookup table. Key Discogs taxonomy gaps: no "Melodic Techno," no "Organic House," no "Afro House" — these are mapped manually.
+
+**Resolution flow:**
+```
+Tracklist → "Artist - Track Title"
+  ├── Spotify Search → ISRC + Spotify URI
+  ├── ISRC → Beatport 10M dataset → BPM, key, Beatport genre/subgenre
+  ├── fuzzy match → NaturNestAI → Discogs styles, label, subgenre
+  ├── ISRC → MusicBrainz → MBID → AcousticBrainz → BPM, key (backup)
+  └── Label → lookup table → Beatport genre (fallback)
+```
+
+**Estimated coverage:** BPM ~90%+, Key ~85%+, Subgenre ~80%+, Label ~90%+.
+
+#### v2: Audio Analysis (deferred)
+
+In a future phase, audio-based features will supplement metadata:
+- **CLAP embeddings** for text-audio alignment (user types "dark minimal techno" → matches audio embeddings). Killer feature for natural language prompts.
+- **Essentia discogs-effnet** for 400 Discogs style classifications + 1280-dim audio embeddings.
+- **Essentia RhythmExtractor + KeyExtractor** for BPM/key on uncovered tracks.
+- Audio source: Deezer previews (still available) or YouTube — not Spotify (previews deprecated).
+- Reference: Deej-AI's Track2Vec approach (5-second mel spectrogram slices + TF-IDF weighted CNN aggregation).
 
 ### Database Schema
 
 - Tables: `djs`, `sets`, `tracks`, `set_tracks`, `transitions`
+- `sets` includes a `set_type` field (`live`, `radio`, `mixtape`) to distinguish sequencing contexts
+- `tracks` includes `isrc` and `musicbrainz_id` columns for cross-referencing with enrichment datasets
 - `transitions` is derived: consecutive track pairs within a set, the foundation of the transition embedding corpus
 - Postgres 16 + pgvector stores both relational data and all embedding vectors in a single instance
 
@@ -169,11 +228,13 @@ Good tests verify **external behavior through module interfaces**, not internal 
 - **Model training** — uses Claude and Voyage as-is. The work is orchestration, retrieval, and evaluation, not ML research.
 - **Apple Music / SoundCloud integration** — Spotify only for v1. Apple Music is in the future backlog.
 - **Set segment embeddings (Layer 4)** — deferred until evals indicate value.
-- **CLAP or Essentia audio ML models** — deferred to a future phase. v1 uses metadata-only embeddings.
+- **CLAP or Essentia audio ML models** — deferred to v2. v1 uses metadata-only enrichment from pre-built datasets.
+- **Spotify Audio Features / Audio Analysis** — deprecated by Spotify in November 2024. Replaced by Beatport 10M dataset + AcousticBrainz dumps for BPM/key data.
+- **Beatport API** — gated partner program, no public access. Using the Kaggle Beatport 10M dataset instead.
+- **Audio-based track embeddings** — deferred to v2. Will use CLAP (text-audio alignment) + Essentia discogs-effnet on Deezer/YouTube audio.
 - **MCP server** — deferred to future backlog.
 - **Mobile-native app** — web-first.
 - **Live re-planning ("More Energy" mid-playlist)** — deferred to future backlog.
-- **DJ selection** — the specific list of DJs to scrape is TBD and will be decided outside this PRD.
 
 ## Further Notes
 
@@ -182,3 +243,7 @@ Good tests verify **external behavior through module interfaces**, not internal 
 - **The self-correction loop (agent scoring its own output) is a strong portfolio talking point.** It demonstrates that the system doesn't just generate once and hope — it evaluates, identifies weaknesses, and iterates. This pattern is directly relevant to production AI systems.
 - **Holdout validation against real DJ sets is the most compelling eval story.** "I validated generated playlists against held-out real DJ sets and measured track overlap and energy arc similarity" is concrete, rigorous, and grounded — exactly what an interviewer wants to hear.
 - **The eval methodology doc (`docs/eval-methodology.md`) is as important as the code.** Articulating *why* you chose each metric and what trade-offs you made demonstrates judgment that code alone cannot show.
+- **Pre-built datasets replace deprecated APIs.** Spotify's Audio Features deprecation (Nov 2024) was a forcing function to find better data sources. The Beatport 10M dataset, NaturNestAI electronic-music-knowledge dataset, and AcousticBrainz dumps collectively provide BPM, key, subgenre, and style data for tens of millions of tracks — better coverage than the Spotify API ever offered for electronic music.
+- **Beatport's taxonomy is the gold standard for electronic music classification.** Adopted as the canonical genre taxonomy, with Discogs styles mapped to Beatport categories via a curated lookup table.
+- **Prior art validates the approach.** The mir-aidj research group (ISMIR 2020) demonstrated that real DJ transitions follow learnable patterns. Deej-AI's Track2Vec showed playlist co-occurrence embeddings work, but our transition embeddings from real DJ sets are a strictly stronger signal — directional, intentional, and metadata-rich.
+- **OneTagger** (open-source, Rust) is the closest reference architecture for multi-source track matching (Beatport + Discogs + MusicBrainz). Study its matching logic when building the resolution pipeline.
