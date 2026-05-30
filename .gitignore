@@ -22,6 +22,7 @@ pgdata/
 
 # Personal notes
 ARCHITECTURE_NOTES.md
+docs/PROJECT_PLAN.md
 
 # OS
 .DS_Store

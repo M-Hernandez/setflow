@@ -63,14 +63,16 @@ alembic revision --autogenerate -m "description"
 - **pgvector over Pinecone:** keeps everything in one Postgres instance, simpler deployment
 - **Voyage over OpenAI embeddings:** higher quality, Anthropic-aligned
 - **Transition embeddings as RAG corpus:** embed real DJ track pairs to retrieve DJ-validated transitions, not just similar tracks
-- **Multi-source ingestion:** 1001tracklists for set structure, Spotify for track metadata, Discogs for granular subgenre/style tags (critical for electronic music)
+- **Multi-source ingestion:** 1001tracklists + MixesDB + Mixcloud for set structure, pre-built datasets (Beatport 10M, NaturNestAI, AcousticBrainz) for track metadata/enrichment, Discogs API for gap filling
+- **Beatport taxonomy as canonical:** Beatport's genre categories are the target taxonomy; Discogs styles mapped via lookup table
+- **Pre-built datasets over deprecated APIs:** Spotify Audio Features deprecated Nov 2024; BPM/key/subgenre data comes from Beatport 10M dataset + AcousticBrainz dumps + NaturNestAI dataset instead
 - **Self-correcting agent:** agent scores its own playlist against eval rubric and revises weak transitions before returning results
 - **SSE for streaming:** Claude agent thinking + tool calls streamed to React frontend via FastAPI SSE
 - **Spotify-first delivery:** tracks resolved to Spotify URIs during ingestion; playlist creation is a single API call
 
 ## Known hard problems
 
-- **1001tracklists scraping:** aggressive rate limiting — use httpx with exponential backoff, cache every page to `data/cache/`, scrape slowly over multiple days. One-time data collection, not a live pipeline.
+- **1001tracklists scraping:** Cloudflare-protected, aggressive rate limiting — use `curl_cffi` (mimics browser TLS) + `cloudscraper`, Playwright as fallback. Cache every page to `data/cache/`, 10-30s delays between requests, scrape overnight. One-time data collection, not a live pipeline.
 - **Track normalization + multi-source resolution:** "Artist - Track (Original Mix)" vs "Artist - Track" vs "Artist - Track [Label]" must match across 1001tracklists, Spotify, Discogs, and MusicBrainz. Uses `rapidfuzz` + ISRC lookup + manual rules.
 - **Discogs resolution:** track names won't perfectly match Discogs entries. Fuzzy match for ~70-80% track-level, fall back to label-level style tags for the rest.
 - **Agent tool design:** start fine-grained, consolidate as you learn what Claude actually calls. Log every tool call to Langfuse.
