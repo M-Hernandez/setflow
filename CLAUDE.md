@@ -76,6 +76,13 @@ alembic revision --autogenerate -m "description"
 - **Agent tool design:** start fine-grained, consolidate as you learn what Claude actually calls. Log every tool call to Langfuse.
 - **Defining "good" for evals:** subjective by nature. Document rubric choices and trade-offs in `docs/eval-methodology.md`.
 
+## Production hardening (Phase 7)
+
+Items that are fine for local dev but must be addressed before deploy:
+
+- **CORS:** `backend/app/main.py` uses `allow_origins=["*"]` — restrict to the actual frontend domain
+- **Health endpoint:** `backend/app/api/health.py` returns raw DB error strings when degraded — sanitize for production
+
 ## Environment variables
 
 See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATABASE_URL`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`.

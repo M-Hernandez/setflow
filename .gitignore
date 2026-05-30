@@ -20,6 +20,9 @@ data/
 # Postgres volume (if running outside docker)
 pgdata/
 
+# Personal notes
+ARCHITECTURE_NOTES.md
+
 # OS
 .DS_Store
 Thumbs.db
