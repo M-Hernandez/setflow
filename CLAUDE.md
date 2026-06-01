@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git workflow
+
+**Never push directly to main.** All work must go through feature branches and pull requests:
+
+1. Create a feature branch from main: `git checkout -b issue-<number>/<short-description>`
+2. Commit work to the feature branch
+3. Push the branch and open a PR into main
+4. Merge via PR (squash or merge commit)
+
 ## Project overview
 
 AI DJ Playlist Engine — an AI-powered playlist engine that learns sequencing patterns from real DJ sets and generates playlists with intentional flow. Users describe what they want in natural language (vibe, DJ persona, mood, duration) and Claude generates an ordered playlist where every transition includes reasoning. The core thesis: sequence intelligence — not "what tracks" but "what order, and why."
