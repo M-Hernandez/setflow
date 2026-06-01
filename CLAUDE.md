@@ -16,17 +16,17 @@ Built as a portfolio piece for AI engineer roles and as a personal-use tool. Dem
 - **Embeddings:** Voyage AI (`voyage-3`) stored in pgvector — three layers: track, transition, persona
 - **Frontend:** React + Vite + TypeScript + Tailwind, Recharts for energy curve visualization
 - **Playlist delivery:** Spotify Web API (create playlists in user's account via OAuth)
-- **Data sources:** 1001tracklists (set structure) + Spotify API (track metadata) + Discogs (subgenre/style/label) + MusicBrainz (ISRC dedup)
+- **Data sources:** YouTube descriptions via yt-dlp (primary) + MixesDB MediaWiki API + Mixcloud API for set structure; Beatport 10M dataset (genre-filtered) for BPM/key/subgenre; Spotify API for track resolution (ISRC + URI); Discogs API for gap filling
 - **Observability:** Langfuse (free tier) + loguru
 
 **Key architectural property:** The agent produces a canonical playlist with Spotify URIs already resolved during ingestion. Playlist delivery is a single Spotify API call.
 
 ## Build plan phases
 
-The project follows phased development defined in `PROJECT_PLAN.md`:
+The project follows phased development defined in `docs/PROJECT_PLAN.md` (gitignored, personal reference):
 
 - **Phase 0** — Foundation: FastAPI scaffold, Postgres+pgvector via docker-compose, test routes, React frontend
-- **Phase 1** — Data ingestion: 1001tracklists scraper, Spotify API metadata, Discogs subgenre/style enrichment, MusicBrainz ISRC dedup, track normalization with rapidfuzz
+- **Phase 1** — Data ingestion: YouTube + MixesDB + Mixcloud tracklist extraction, Beatport 10M genre-filtered loader, Spotify track resolution (ISRC + URI), remix-aware fuzzy matching with rapidfuzz, transition derivation, Discogs gap filling
 - **Phase 2** — Embeddings: track embeddings, transition pair embeddings (RAG corpus), DJ persona embeddings in pgvector, hybrid retrieval endpoints
 - **Phase 3** — Agent (centerpiece): Claude tool-use loop with 5 tools (search_tracks, get_transition_candidates, check_harmonic_compatibility, get_persona_style, score_playlist), self-correction loop
 - **Phase 4** — Spotify playlist delivery: OAuth + playlist creation in user's account
@@ -63,17 +63,19 @@ alembic revision --autogenerate -m "description"
 - **pgvector over Pinecone:** keeps everything in one Postgres instance, simpler deployment
 - **Voyage over OpenAI embeddings:** higher quality, Anthropic-aligned
 - **Transition embeddings as RAG corpus:** embed real DJ track pairs to retrieve DJ-validated transitions, not just similar tracks
-- **Multi-source ingestion:** 1001tracklists + MixesDB + Mixcloud for set structure, pre-built datasets (Beatport 10M, NaturNestAI, AcousticBrainz) for track metadata/enrichment, Discogs API for gap filling
+- **YouTube-first ingestion:** YouTube descriptions (via yt-dlp) as primary tracklist source — timestamps give transition timing data. MixesDB MediaWiki API as secondary, Mixcloud REST API as tertiary. 1001tracklists deferred to v2 (Cloudflare not worth the cost when 3 easier sources cover all seed DJs)
 - **Beatport taxonomy as canonical:** Beatport's genre categories are the target taxonomy; Discogs styles mapped via lookup table
-- **Pre-built datasets over deprecated APIs:** Spotify Audio Features deprecated Nov 2024; BPM/key/subgenre data comes from Beatport 10M dataset + AcousticBrainz dumps + NaturNestAI dataset instead
+- **Beatport 10M genre-filtered:** Spotify Audio Features deprecated Nov 2024; BPM/key/subgenre comes from Beatport 10M dataset filtered to 6 target genres (~500K-1M rows). NaturNestAI and AcousticBrainz deferred until coverage gaps measured
+- **Remix-aware track matching:** parse remix tags as separate field, match base title + remix tag independently to avoid matching wrong version (e.g., Original Mix vs ARTBAT Remix have different BPM/key)
 - **Self-correcting agent:** agent scores its own playlist against eval rubric and revises weak transitions before returning results
 - **SSE for streaming:** Claude agent thinking + tool calls streamed to React frontend via FastAPI SSE
 - **Spotify-first delivery:** tracks resolved to Spotify URIs during ingestion; playlist creation is a single API call
 
 ## Known hard problems
 
-- **1001tracklists scraping:** Cloudflare-protected, aggressive rate limiting — use `curl_cffi` (mimics browser TLS) + `cloudscraper`, Playwright as fallback. Cache every page to `data/cache/`, 10-30s delays between requests, scrape overnight. One-time data collection, not a live pipeline.
-- **Track normalization + multi-source resolution:** "Artist - Track (Original Mix)" vs "Artist - Track" vs "Artist - Track [Label]" must match across 1001tracklists, Spotify, Discogs, and MusicBrainz. Uses `rapidfuzz` + ISRC lookup + manual rules.
+- **Track normalization + remix disambiguation:** "Artist - Track (Original Mix)" vs "Artist - Track (ARTBAT Remix)" vs "Artist - Track [Label]" must resolve correctly across YouTube, MixesDB, Spotify, and Beatport. Wrong remix = wrong BPM/key. Uses remix-aware parsing + `rapidfuzz` + ISRC lookup.
+- **Beatport dataset coverage:** Dataset is from Sept 2023; newer tracks won't be in it. Discogs API is the fallback for post-2023 releases.
+- **Energy data gap:** Spotify energy field deprecated. v1 uses BPM-based heuristic; real energy data deferred to v2 audio analysis.
 - **Discogs resolution:** track names won't perfectly match Discogs entries. Fuzzy match for ~70-80% track-level, fall back to label-level style tags for the rest.
 - **Agent tool design:** start fine-grained, consolidate as you learn what Claude actually calls. Log every tool call to Langfuse.
 - **Defining "good" for evals:** subjective by nature. Document rubric choices and trade-offs in `docs/eval-methodology.md`.
@@ -89,9 +91,40 @@ Items that are fine for local dev but must be addressed before deploy:
 
 See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATABASE_URL`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`.
 
+## Current state
+
+**Phase 0 (Foundation) — complete.** All issues closed:
+- #2: Postgres 16 + pgvector via docker-compose (PR #7)
+- #3: FastAPI scaffold with /health route (PR #8)
+- #4: Anthropic + Voyage SDK test routes (PR #9)
+- #5: React + Vite + Tailwind frontend (PR #10)
+
+**Phase 1 (Data Ingestion) — issues created.** 8 issues (#11-#18):
+- #11: Schema + Alembic migrations
+- #12: Beatport 10M genre-filtered loader
+- #13: YouTube tracklist scraper + parser
+- #14: MixesDB API client + wiki markup parser
+- #15: Track resolution pipeline (Spotify → Beatport → Postgres)
+- #16: Transition derivation from set_tracks
+- #17: Seed DJ validation run (6 DJs, ~40 sets)
+- #18: Gap filling (Mixcloud + Discogs)
+
+**Next:** Start with #11 (schema), then #12 + #13 + #14 in parallel.
+
 ## Custom skills
 
-Two custom skills live in `skills/`:
+Four custom skills live in `.claude/skills/`:
 
 - **`grill-me`** — Stress-test a plan or design through relentless interviewing, walking each branch of the decision tree. Invoke when the user says "grill me" or wants to stress-test a design.
+- **`tdd`** — Test-driven development with red-green-refactor loop.
+- **`to-issues`** — Break a plan, spec, or PRD into independently-grabbable issues on the project issue tracker.
 - **`to-prd`** — Synthesize current conversation context into a PRD and publish to the issue tracker. Does not interview — just synthesizes what's known.
+
+## Post-merge checklist
+
+After every merge to main, update the following documentation and architecture files to reflect the latest changes:
+
+- **`CLAUDE.md`** — update the "Current state" section with completed issues/PRs and what's next
+- **`ARCHITECTURE_NOTES.md`** (gitignored) — update the "Last updated" line, file tree, module descriptions, and "What doesn't exist yet" section
+- **`docs/PROJECT_PLAN.md`** (gitignored) — no changes needed unless the plan itself changes
+- **Memory files** — update `project_progress.md` to reflect current phase status
