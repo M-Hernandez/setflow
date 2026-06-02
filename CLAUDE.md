@@ -61,6 +61,7 @@ npm run dev                # Vite dev server
 
 # Ingestion
 python -m app.ingestion.scrape --dj solomun --limit 5
+python -m app.ingestion.scrape_mixesdb --dj "ARTBAT" --limit 10
 
 # Migrations
 alembic upgrade head
@@ -108,17 +109,17 @@ See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATAB
 - #4: Anthropic + Voyage SDK test routes (PR #9)
 - #5: React + Vite + Tailwind frontend (PR #10)
 
-**Phase 1 (Data Ingestion) — issues created.** 8 issues (#11-#18):
-- #11: Schema + Alembic migrations
+**Phase 1 (Data Ingestion) — in progress.** 8 issues (#11-#18):
+- #11: Schema + Alembic migrations — **done** (PR #18, merged)
 - #12: Beatport 10M genre-filtered loader
-- #13: YouTube tracklist scraper + parser
+- #13: YouTube tracklist scraper + parser — **done** (PR #19, merged)
 - #14: MixesDB API client + wiki markup parser
 - #15: Track resolution pipeline (Spotify → Beatport → Postgres)
 - #16: Transition derivation from set_tracks
 - #17: Seed DJ validation run (6 DJs, ~40 sets)
 - #18: Gap filling (Mixcloud + Discogs)
 
-**Next:** Start with #11 (schema), then #12 + #13 + #14 in parallel.
+**Next:** #12 + #14 can run in parallel. #15 needs #12 done.
 
 ## Custom skills
 
