@@ -19,6 +19,8 @@ dependencies = [
     "alembic>=1.13",
     "pgvector>=0.3",
     "yt-dlp>=2024.0",
+    "pandas>=2.0",
+    "psycopg2-binary>=2.9",
 ]
 
 [project.optional-dependencies]

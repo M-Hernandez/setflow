@@ -142,3 +142,25 @@ class Transition(Base):
     set: Mapped["Set"] = relationship(back_populates="transitions")
     track_a: Mapped["Track"] = relationship(foreign_keys=[track_a_id])
     track_b: Mapped["Track"] = relationship(foreign_keys=[track_b_id])
+
+
+class BeatportTrack(Base):
+    """Denormalized reference table from the Beatport 10M Kaggle dataset.
+
+    Used by the track resolution pipeline to enrich parsed tracklists
+    with BPM, key, genre, subgenre, and label data.
+    """
+
+    __tablename__ = "beatport_tracks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)  # Beatport track ID
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    mix_name: Mapped[str | None] = mapped_column(String(500))
+    artist: Mapped[str] = mapped_column(String(1000), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(500))
+    isrc: Mapped[str | None] = mapped_column(String(12), index=True)
+    bpm: Mapped[int | None] = mapped_column(Integer)
+    key: Mapped[str | None] = mapped_column(String(10))
+    genre: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    subgenre: Mapped[str | None] = mapped_column(String(255))
+    release_date: Mapped[str | None] = mapped_column(String(10))
