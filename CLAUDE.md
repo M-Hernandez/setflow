@@ -113,7 +113,7 @@ See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATAB
 - #11: Schema + Alembic migrations — **done** (PR #18, merged)
 - #12: Beatport 10M genre-filtered loader
 - #13: YouTube tracklist scraper + parser — **done** (PR #19, merged)
-- #14: MixesDB API client + wiki markup parser
+- #14: MixesDB API client + wiki markup parser — **done** (PR #20, merged)
 - #15: Track resolution pipeline (Spotify → Beatport → Postgres)
 - #16: Transition derivation from set_tracks
 - #17: Seed DJ validation run (6 DJs, ~40 sets)
