@@ -18,6 +18,7 @@ dependencies = [
     "voyageai>=0.3",
     "alembic>=1.13",
     "pgvector>=0.3",
+    "yt-dlp>=2024.0",
 ]
 
 [project.optional-dependencies]

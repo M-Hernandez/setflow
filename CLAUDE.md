@@ -129,6 +129,16 @@ Four custom skills live in `.claude/skills/`:
 - **`to-issues`** — Break a plan, spec, or PRD into independently-grabbable issues on the project issue tracker.
 - **`to-prd`** — Synthesize current conversation context into a PRD and publish to the issue tracker. Does not interview — just synthesizes what's known.
 
+## Saving research and design decisions
+
+When research is conducted or design decisions are made, save findings to **all three places**:
+
+1. **Memory files** — for recall in future conversations
+2. **`docs/PRD.md`** — update the relevant section with the decision and rationale
+3. **`docs/PROJECT_PLAN.md`** — update the relevant phase or backlog item
+
+This ensures the PRD and project plan stay current as the source of truth, not just memory files.
+
 ## Post-merge checklist
 
 After every merge to main, update the following documentation and architecture files to reflect the latest changes:

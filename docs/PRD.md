@@ -99,14 +99,37 @@ Tracklist → "Artist - Track Title"
 
 **Estimated coverage:** BPM ~90%+, Key ~85%+, Subgenre ~80%+, Label ~90%+.
 
-#### v2: Audio Analysis (deferred)
+#### v2: Audio Analysis for Cross-Artist Similarity (deferred)
 
-In a future phase, audio-based features will supplement metadata:
+In a future phase, audio-based embeddings will supplement metadata to enable **cross-artist sonic similarity** — finding tracks that *sound alike* regardless of artist, label, or genre tags. This is something metadata alone can't do.
+
+**Use cases:**
+- Cross-artist discovery ("find tracks that sound like this Adam Beyer track but from different artists")
+- Vibe matching for NL prompts ("dark, driving minimal techno" → audio embeddings)
+- Transition smoothness detection (catch timbral mismatches that harmonic compatibility misses)
+- Inferring missing metadata (audio similarity to labeled tracks fills subgenre gaps)
+
+**Primary model: Essentia discogs-effnet (1280-dim)**
+- Trained on Discogs data — deep coverage of electronic and underground music
+- Proven at scale: cosine.club indexes 1.9M tracks (house, techno, jungle, D&B, breakbeat, electro, ambient) using this model
+- Contrastive learning on artist, label, release, and self-supervised signals
+
+**Supplementary models:**
 - **CLAP embeddings** for text-audio alignment (user types "dark minimal techno" → matches audio embeddings). Killer feature for natural language prompts.
-- **Essentia discogs-effnet** for 400 Discogs style classifications + 1280-dim audio embeddings.
 - **Essentia RhythmExtractor + KeyExtractor** for BPM/key on uncovered tracks.
-- Audio source: Deezer previews (still available) or YouTube — not Spotify (previews deprecated).
-- Reference: Deej-AI's Track2Vec approach (5-second mel spectrogram slices + TF-IDF weighted CNN aggregation).
+
+**Audio source:** Deezer 30-sec previews (still alive, rate-limited) or YouTube full tracks via yt-dlp — NOT Spotify (previews deprecated).
+
+**Implementation plan:**
+1. Acquire audio for ~15K resolved tracks via Deezer previews or yt-dlp
+2. Run Essentia discogs-effnet → 1280-dim embeddings (~5-7s/track, ~3-4 hours on 8-core CPU)
+3. Store in pgvector alongside Voyage text embeddings (separate column — dimensions differ: 1024 vs 1280)
+4. Hybrid retrieval: metadata filters (BPM, key, subgenre) → audio embedding similarity ranking
+
+**Public dataset landscape (researched 2026-06-01):**
+No public dataset has sufficient electronic music coverage to use out of the box. DISCO-10M (15.3M tracks, CLAP 512-dim) is pop-heavy. FMA-MERT (8K tracks, MERT 1024-dim, 65 MB) is useful for prototyping only. Must compute own embeddings.
+
+**Key limitation:** Spectrograms can't fully capture culturally-defined subgenre distinctions (Deej-AI finding). Audio embeddings are complementary to metadata, not a replacement — BPM/key/harmonic compatibility remain deterministic and exact.
 
 ### Database Schema
 
