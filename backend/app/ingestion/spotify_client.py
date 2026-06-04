@@ -26,6 +26,21 @@ class SpotifyResult(BaseModel):
     artist: str
 
 
+class SpotifyRateLimitError(Exception):
+    """Raised when Spotify rate limit retry-after exceeds max wait."""
+
+    def __init__(self, retry_after: int) -> None:
+        self.retry_after = retry_after
+        super().__init__(f"Spotify rate limit: retry after {retry_after}s exceeds max wait")
+
+
+# Don't wait longer than 30s on a single rate-limit retry
+MAX_RATE_LIMIT_WAIT = 30
+
+# Minimum seconds between API calls (Spotify uses a rolling 30s window)
+MIN_REQUEST_INTERVAL = 1.0
+
+
 class SpotifyClient:
     """Thin wrapper around spotipy with caching and rate-limit handling."""
 
@@ -34,8 +49,12 @@ class SpotifyClient:
             client_id=settings.spotify_client_id,
             client_secret=settings.spotify_client_secret,
         )
-        self._sp = spotipy.Spotify(auth_manager=auth_manager)
+        # Disable spotipy's internal retries — we handle rate limits ourselves
+        self._sp = spotipy.Spotify(
+            auth_manager=auth_manager, retries=0, status_retries=0
+        )
         self._cache: dict[str, SpotifyResult | None] = {}
+        self._last_request_time: float = 0.0
 
     def search_track(
         self,
@@ -59,11 +78,18 @@ class SpotifyClient:
 
         for attempt in range(max_retries):
             try:
+                self._throttle()
                 results = self._sp.search(q=query, type="track", limit=5)
                 break
             except spotipy.exceptions.SpotifyException as e:
                 if e.http_status == 429:
                     retry_after = int(e.headers.get("Retry-After", 2 ** attempt))
+                    if retry_after > MAX_RATE_LIMIT_WAIT:
+                        logger.error(
+                            "Spotify rate limit too long (%ds), aborting",
+                            retry_after,
+                        )
+                        raise SpotifyRateLimitError(retry_after)
                     logger.warning(
                         "Spotify rate limited, retrying in %ds (attempt %d/%d)",
                         retry_after,
@@ -97,3 +123,10 @@ class SpotifyClient:
 
         self._cache[query] = result
         return result
+
+    def _throttle(self) -> None:
+        """Enforce minimum interval between Spotify API requests."""
+        elapsed = time.monotonic() - self._last_request_time
+        if elapsed < MIN_REQUEST_INTERVAL:
+            time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+        self._last_request_time = time.monotonic()

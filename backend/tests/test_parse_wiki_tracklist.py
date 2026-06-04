@@ -125,6 +125,40 @@ class TestParseWikiTrackLine:
         assert result.remix is None
         assert result.artist == "Gotye Feat. Kimbra"
 
+    def test_wiki_bold_markup_stripped(self):
+        result = parse_wiki_track_line(
+            "# [12] ''Fisher - ID''", 1
+        )
+        assert result is not None
+        assert result.artist == "Fisher"
+        assert result.title == "ID"
+
+    def test_wiki_triple_quote_stripped(self):
+        result = parse_wiki_track_line(
+            "# [00] '''Chris Lake - Boneless'''", 1
+        )
+        assert result is not None
+        assert result.artist == "Chris Lake"
+        assert result.title == "Boneless"
+
+    def test_embedded_timestamp_prefix_stripped(self):
+        result = parse_wiki_track_line(
+            "# [000:00] Robin Schulz - Above The Clouds", 1
+        )
+        assert result is not None
+        assert result.artist == "Robin Schulz"
+        assert result.title == "Above The Clouds"
+
+    def test_embedded_timestamp_3digit_stripped(self):
+        """3-digit timestamps like [116:26] aren't captured by the wiki regex,
+        so they end up in the track text and need stripping."""
+        result = parse_wiki_track_line(
+            "# [116:26] Don Diablo - Anthem", 1
+        )
+        assert result is not None
+        assert result.artist == "Don Diablo"
+        assert result.title == "Anthem"
+
 
 class TestParseWikiTracklist:
     def test_single_dj(self):

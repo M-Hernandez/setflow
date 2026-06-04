@@ -12,7 +12,7 @@ from app.ingestion.resolve import (
     resolve_track,
     resolve_tracks,
 )
-from app.ingestion.spotify_client import SpotifyResult
+from app.ingestion.spotify_client import SpotifyRateLimitError, SpotifyResult
 from app.models import DJ, BeatportTrack, Set, SetTrack, SetType, Track
 
 
@@ -100,17 +100,47 @@ class TestResolveTrack:
         assert track.genre == "TestResolveGenre"
         assert unresolved is None
 
-    async def test_no_spotify_match(self, db_session, beatport_data):
-        """No Spotify result → unresolved with reason."""
+    async def test_no_spotify_falls_through_to_beatport(self, db_session, beatport_data):
+        """No Spotify result → still resolves via Beatport fuzzy match."""
         mock = MagicMock()
         mock.search_track = MagicMock(return_value=None)
 
         parsed = _make_parsed()
         track, unresolved = await resolve_track(db_session, parsed, mock)
 
-        assert track is None
+        assert track is not None
+        assert track.spotify_uri is None
+        assert track.bpm == 122.0  # from Beatport fuzzy match
+        assert track.key == "Am"
+        assert unresolved is None  # fully resolved via Beatport
+
+    async def test_no_spotify_no_beatport_still_saves(self, db_session):
+        """No Spotify + no Beatport → track saved with nulls for backfill."""
+        mock = MagicMock()
+        mock.search_track = MagicMock(return_value=None)
+
+        parsed = _make_parsed(artist="ZZZNoMatchArtist", title="ZZZ Totally Unknown")
+        track, unresolved = await resolve_track(db_session, parsed, mock)
+
+        assert track is not None
+        assert track.spotify_uri is None
+        assert track.bpm is None
+        assert track.key is None
         assert unresolved is not None
-        assert unresolved.reason == "no_spotify_match"
+        assert unresolved.reason == "no_enrichment"
+
+    async def test_rate_limit_degrades_to_beatport(self, db_session, beatport_data):
+        """SpotifyRateLimitError → continues with Beatport-only resolution."""
+        mock = MagicMock()
+        mock.search_track = MagicMock(side_effect=SpotifyRateLimitError(86400))
+
+        parsed = _make_parsed()
+        track, unresolved = await resolve_track(db_session, parsed, mock)
+
+        assert track is not None
+        assert track.spotify_uri is None
+        assert track.bpm == 122.0  # Beatport fuzzy match still works
+        assert unresolved is None
 
     async def test_spotify_but_no_beatport(self, db_session, mock_spotify):
         """Spotify found but no Beatport match → partially resolved."""
@@ -218,18 +248,26 @@ class TestResolveTracks:
         assert set_tracks[0].position == 1
         assert set_tracks[1].position == 2
 
-    async def test_unresolved_track_logged(self, db_session, dj_and_set):
-        """Tracks with no Spotify match should appear in unresolved list."""
+    async def test_no_enrichment_track_still_saved(self, db_session, dj_and_set):
+        """Tracks with no Spotify + no Beatport match still get saved with SetTrack."""
         _, s = dj_and_set
         mock = MagicMock()
         mock.search_track.return_value = None
 
-        parsed_tracks = [_make_parsed(position=1)]
+        parsed_tracks = [_make_parsed(
+            position=1, artist="ZZZNoMatchArtist", title="ZZZ Totally Unknown"
+        )]
         result = await resolve_tracks(db_session, parsed_tracks, s.id, mock)
 
-        assert result.resolved == 0
+        assert result.resolved == 1  # track saved even without enrichment
         assert len(result.unresolved) == 1
-        assert result.unresolved[0].reason == "no_spotify_match"
+        assert result.unresolved[0].reason == "no_enrichment"
+
+        # Verify SetTrack link was created
+        rows = await db_session.execute(
+            select(SetTrack).where(SetTrack.set_id == s.id)
+        )
+        assert len(rows.scalars().all()) == 1
 
     async def test_timestamp_linked(self, db_session, dj_and_set, beatport_data, mock_spotify):
         """SetTrack should include start_time_seconds from parsed track."""

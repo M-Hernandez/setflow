@@ -1,15 +1,17 @@
 """Track resolution pipeline: ParsedTrack → enriched Track + SetTrack rows.
 
-Resolution flow per track:
+Every parsed track gets saved to the DB. Enrichment is best-effort:
 1. Canonicalize artist/title/remix
 2. Check for existing Track by (title, artist, remix) — deduplicate
-3. Search Spotify → get ISRC, URI, duration
+3. Search Spotify (best-effort) → get ISRC, URI, duration
 4. Look up ISRC in Beatport → get BPM, key, genre, subgenre
 5. If no ISRC match, fuzzy match against Beatport
 6. Insert Track (or reuse existing) + link via SetTrack
+Tracks with no enrichment are saved with nulls for backfill later.
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -18,8 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ingestion.beatport_lookup import BeatportMatch, fuzzy_match, lookup_by_isrc
 from app.ingestion.canonicalize import canonicalize_track
 from app.ingestion.parse_tracklist import ParsedTrack
-from app.ingestion.spotify_client import SpotifyClient, SpotifyResult
+from app.ingestion.spotify_client import SpotifyClient, SpotifyRateLimitError, SpotifyResult
 from app.models import SetTrack, Track
+
+# Remix tags to strip and retry without when Spotify search fails
+_EXTENDED_MIX_RE = re.compile(r"^extended\s+mix$", re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +37,7 @@ class UnresolvedTrack:
     title: str
     remix: str | None
     position: int
-    reason: str  # "no_spotify_match", "no_beatport_match"
+    reason: str  # "no_spotify_match", "no_beatport_match", "no_enrichment"
 
 
 @dataclass
@@ -102,12 +107,15 @@ def _apply_beatport_enrichment(track: Track, bp: BeatportMatch) -> None:
 async def resolve_track(
     session: AsyncSession,
     parsed: ParsedTrack,
-    spotify: SpotifyClient,
-) -> tuple[Track | None, UnresolvedTrack | None]:
+    spotify: SpotifyClient | None,
+) -> tuple[Track, UnresolvedTrack | None]:
     """Resolve a single parsed track to an enriched Track row.
 
-    Returns (track, None) on success, (None, unresolved) on failure,
-    or (track, unresolved) when Spotify resolved but Beatport didn't.
+    Always returns a Track (never None). Enrichment is best-effort:
+    Spotify → Beatport ISRC → Beatport fuzzy → save with nulls.
+
+    Returns (track, None) on full enrichment, or (track, unresolved)
+    when some enrichment source failed.
     """
     c_artist, c_title, c_remix = canonicalize_track(
         parsed.artist, parsed.title, parsed.remix
@@ -116,31 +124,31 @@ async def resolve_track(
     # Step 1: Check for existing track by identity
     existing = await _find_existing_track(session, c_artist, c_title, c_remix)
 
-    # Step 2: Search Spotify
-    spotify_result: SpotifyResult | None = spotify.search_track(
-        parsed.artist, parsed.title, parsed.remix
-    )
-
-    if spotify_result is None:
-        if existing:
-            return existing, None
-        return None, UnresolvedTrack(
-            artist=parsed.artist,
-            title=parsed.title,
-            remix=parsed.remix,
-            position=parsed.position,
-            reason="no_spotify_match",
-        )
+    # Step 2: Search Spotify (best-effort)
+    spotify_result: SpotifyResult | None = None
+    if spotify is not None:
+        try:
+            spotify_result = spotify.search_track(
+                parsed.artist, parsed.title, parsed.remix
+            )
+            # Fallback: if remix is "Extended Mix", retry without it
+            if spotify_result is None and parsed.remix and _EXTENDED_MIX_RE.match(parsed.remix):
+                spotify_result = spotify.search_track(parsed.artist, parsed.title, None)
+        except SpotifyRateLimitError:
+            logger.warning(
+                "Spotify rate limited — continuing without Spotify for track: %s - %s",
+                parsed.artist, parsed.title,
+            )
 
     # Step 2b: Deduplicate by ISRC or Spotify URI
-    if not existing and spotify_result.isrc:
+    if not existing and spotify_result and spotify_result.isrc:
         existing = await _find_by_isrc(session, spotify_result.isrc)
-    if not existing:
+    if not existing and spotify_result:
         existing = await _find_by_spotify_uri(session, spotify_result.spotify_uri)
 
-    # Step 3: Beatport enrichment — ISRC first, then fuzzy
+    # Step 3: Beatport enrichment — ISRC first, then fuzzy (runs regardless of Spotify)
     beatport: BeatportMatch | None = None
-    if spotify_result.isrc:
+    if spotify_result and spotify_result.isrc:
         beatport = await lookup_by_isrc(session, spotify_result.isrc)
 
     if beatport is None:
@@ -148,21 +156,22 @@ async def resolve_track(
             session, c_artist, c_title, c_remix
         )
 
-    # Step 4: Build or update Track
+    # Step 4: Build or update Track — always create a row
     if existing:
         track = existing
         # Fill in Spotify data if missing
-        if not track.spotify_uri:
-            track.spotify_uri = spotify_result.spotify_uri
-        if not track.isrc and spotify_result.isrc:
-            track.isrc = spotify_result.isrc
+        if spotify_result:
+            if not track.spotify_uri:
+                track.spotify_uri = spotify_result.spotify_uri
+            if not track.isrc and spotify_result.isrc:
+                track.isrc = spotify_result.isrc
     else:
         track = Track(
             title=c_title,
             artist=c_artist,
             remix=c_remix,
-            spotify_uri=spotify_result.spotify_uri,
-            isrc=spotify_result.isrc,
+            spotify_uri=spotify_result.spotify_uri if spotify_result else None,
+            isrc=spotify_result.isrc if spotify_result else None,
         )
         session.add(track)
 
@@ -171,12 +180,13 @@ async def resolve_track(
     if beatport:
         _apply_beatport_enrichment(track, beatport)
     else:
+        reason = "no_enrichment" if spotify_result is None else "no_beatport_match"
         unresolved = UnresolvedTrack(
             artist=parsed.artist,
             title=parsed.title,
             remix=parsed.remix,
             position=parsed.position,
-            reason="no_beatport_match",
+            reason=reason,
         )
 
     return track, unresolved
@@ -186,7 +196,7 @@ async def resolve_tracks(
     session: AsyncSession,
     parsed_tracks: list[ParsedTrack],
     set_id: int,
-    spotify: SpotifyClient,
+    spotify: SpotifyClient | None,
 ) -> ResolutionResult:
     """Resolve a list of parsed tracks and link them to a set.
 
@@ -199,19 +209,6 @@ async def resolve_tracks(
 
     for parsed in parsed_tracks:
         track, unresolved = await resolve_track(session, parsed, spotify)
-
-        if track is None:
-            if unresolved:
-                result.unresolved.append(unresolved)
-                logger.warning(
-                    "Unresolved track [%d]: %s - %s (%s) — %s",
-                    parsed.position,
-                    parsed.artist,
-                    parsed.title,
-                    parsed.remix,
-                    unresolved.reason,
-                )
-            continue
 
         # Flush to get track.id if it's new
         await session.flush()
@@ -232,10 +229,11 @@ async def resolve_tracks(
         if unresolved:
             result.unresolved.append(unresolved)
             logger.info(
-                "Partially resolved [%d]: %s - %s — %s",
+                "Partially resolved [%d]: %s - %s (%s) — %s",
                 parsed.position,
                 parsed.artist,
                 parsed.title,
+                parsed.remix,
                 unresolved.reason,
             )
 
