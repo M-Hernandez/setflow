@@ -116,10 +116,10 @@ See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATAB
 - #14: MixesDB API client + wiki markup parser — **done** (PR #20, merged)
 - #15: Track resolution pipeline — **done** (PR #22, merged)
 - #16: Transition derivation — **done** (PR #23, merged)
-- #17: Seed DJ validation run (6 DJs, ~40 sets)
+- #17: Seed DJ validation run (6 DJs, ~40 sets) — **done** (PR #24, merged)
 - #18: Gap filling (Mixcloud + Discogs)
 
-**Next:** #17 (seed DJ validation run) — run the full pipeline end-to-end on 6 DJs.
+**Next:** #18 (gap filling) — Mixcloud + Discogs enrichment for tracks missing BPM/key/subgenre. Then run seed validation again to check coverage gates.
 
 ## Custom skills
 
