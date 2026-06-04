@@ -111,15 +111,15 @@ See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATAB
 
 **Phase 1 (Data Ingestion) — in progress.** 8 issues (#11-#18):
 - #11: Schema + Alembic migrations — **done** (PR #18, merged)
-- #12: Beatport 10M genre-filtered loader
+- #12: Beatport 10M dataset loader — **done** (PR #21, merged)
 - #13: YouTube tracklist scraper + parser — **done** (PR #19, merged)
 - #14: MixesDB API client + wiki markup parser — **done** (PR #20, merged)
-- #15: Track resolution pipeline (Spotify → Beatport → Postgres)
-- #16: Transition derivation from set_tracks
+- #15: Track resolution pipeline — **done** (PR #22, merged)
+- #16: Transition derivation — **done** (PR #23, merged)
 - #17: Seed DJ validation run (6 DJs, ~40 sets)
 - #18: Gap filling (Mixcloud + Discogs)
 
-**Next:** #12 + #14 can run in parallel. #15 needs #12 done.
+**Next:** #17 (seed DJ validation run) — run the full pipeline end-to-end on 6 DJs.
 
 ## Custom skills
 

@@ -10,6 +10,7 @@ Resolution flow per track:
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -20,6 +21,9 @@ from app.ingestion.canonicalize import canonicalize_track
 from app.ingestion.parse_tracklist import ParsedTrack
 from app.ingestion.spotify_client import SpotifyClient, SpotifyResult
 from app.models import SetTrack, Track
+
+# Remix tags to strip and retry without when Spotify search fails
+_EXTENDED_MIX_RE = re.compile(r"^extended\s+mix$", re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +124,10 @@ async def resolve_track(
     spotify_result: SpotifyResult | None = spotify.search_track(
         parsed.artist, parsed.title, parsed.remix
     )
+
+    # Fallback: if remix is "Extended Mix", retry without it
+    if spotify_result is None and parsed.remix and _EXTENDED_MIX_RE.match(parsed.remix):
+        spotify_result = spotify.search_track(parsed.artist, parsed.title, None)
 
     if spotify_result is None:
         if existing:

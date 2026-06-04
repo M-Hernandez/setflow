@@ -127,6 +127,19 @@ def scrape_youtube(dj_name: str, limit: int = 10) -> list[ScrapedSet]:
     return results
 
 
+def _dj_name_matches(dj_name: str, page_dj_names: list[str]) -> bool:
+    """Check if the target DJ appears in the page's DJ list.
+
+    Uses case-insensitive substring matching to handle variations
+    like "Armin van Buuren b2b ARTBAT" matching target "ARTBAT".
+    """
+    target = dj_name.lower()
+    for name in page_dj_names:
+        if target in name.lower() or name.lower() in target:
+            return True
+    return False
+
+
 def scrape_mixesdb(dj_name: str, limit: int = 10) -> list[ScrapedSet]:
     """Scrape MixesDB for DJ sets and parse tracklists."""
     logger.info("Searching MixesDB for '%s'...", dj_name)
@@ -140,13 +153,30 @@ def scrape_mixesdb(dj_name: str, limit: int = 10) -> list[ScrapedSet]:
         wikitext = page_data.get("wikitext", "")
         categories = page_data.get("categories", [])
 
+        metadata = parse_page_title(title)
+
+        # Skip sets where target DJ doesn't appear in the title
+        if not _dj_name_matches(dj_name, metadata.dj_names):
+            logger.info("Skipping misattributed set: %s (DJs: %s)", title, metadata.dj_names)
+            continue
+
         sections = parse_wiki_tracklist(wikitext)
+
+        # For multi-DJ sets with sections, only keep the target DJ's section
+        if len(sections) > 1:
+            filtered = [s for s in sections if s.dj_name and dj_name.lower() in s.dj_name.lower()]
+            if filtered:
+                sections = filtered
+                logger.info(
+                    "Multi-DJ set '%s': keeping only %s's section (%d tracks)",
+                    title, dj_name, sum(len(s.tracks) for s in sections),
+                )
+
         tracks = flatten_tracks(sections)
 
         if not tracks:
             continue
 
-        metadata = parse_page_title(title)
         metadata.set_type = classify_set_type(categories)
 
         results.append(ScrapedSet(

@@ -79,12 +79,18 @@ def parse_wiki_track_line(line: str, position: int) -> ParsedTrack | None:
     if not line:
         return None
 
+    # Strip wiki bold/italic markup ('', ''')
+    line = line.replace("'''", "").replace("''", "")
+
     match = _WIKI_TRACK_RE.match(line)
     if not match:
         return None
 
     ts_raw = match.group(1)  # None if no bracket, "??" if unknown
     remainder = match.group(2).strip()
+
+    # Strip embedded timestamp prefixes like "[000:00]" from track text
+    remainder = re.sub(r"^\[\d{1,3}:\d{2}\]\s*", "", remainder)
 
     # Compute timestamp fields
     if ts_raw is None:

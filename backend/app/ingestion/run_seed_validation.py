@@ -14,7 +14,7 @@ import sys
 from app.db import async_session
 from app.ingestion.coverage_report import format_report, generate_report
 from app.ingestion.ingest_dj import IngestionResult, ingest_dj
-from app.ingestion.spotify_client import SpotifyClient
+from app.ingestion.spotify_client import SpotifyClient, SpotifyRateLimitError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,30 +44,41 @@ async def run_ingestion(dj_filter: str | None = None) -> list[IngestionResult]:
     spotify = SpotifyClient()
     results: list[IngestionResult] = []
 
-    async with async_session() as session:
-        async with session.begin():
-            for dj_info in djs:
-                logger.info("=" * 60)
-                logger.info("Ingesting: %s (%s)", dj_info["name"], dj_info["genre"])
-                logger.info("=" * 60)
+    for dj_info in djs:
+        logger.info("=" * 60)
+        logger.info("Ingesting: %s (%s)", dj_info["name"], dj_info["genre"])
+        logger.info("=" * 60)
 
-                result = await ingest_dj(
-                    session,
-                    dj_name=dj_info["name"],
-                    genre=dj_info["genre"],
-                    youtube_limit=8,
-                    mixesdb_limit=10,
-                    spotify=spotify,
-                )
-                results.append(result)
+        try:
+            async with async_session() as session:
+                async with session.begin():
+                    result = await ingest_dj(
+                        session,
+                        dj_name=dj_info["name"],
+                        genre=dj_info["genre"],
+                        youtube_limit=8,
+                        mixesdb_limit=10,
+                        spotify=spotify,
+                    )
+                    results.append(result)
 
-                logger.info(
-                    "Done: %d sets, %d tracks resolved, %d unresolved, %d transitions",
-                    result.sets_persisted,
-                    result.tracks_resolved,
-                    result.tracks_unresolved,
-                    result.transitions_created,
-                )
+                    logger.info(
+                        "Done: %d sets, %d tracks resolved, %d unresolved, %d transitions",
+                        result.sets_persisted,
+                        result.tracks_resolved,
+                        result.tracks_unresolved,
+                        result.transitions_created,
+                    )
+        except SpotifyRateLimitError as e:
+            logger.error(
+                "Spotify rate limit hit during %s — skipping remaining DJs. "
+                "Resume later with --dj flag. (retry after %ds)",
+                dj_info["name"],
+                e.retry_after,
+            )
+            break
+        except Exception:
+            logger.exception("Failed to ingest %s — continuing with next DJ", dj_info["name"])
 
     return results
 

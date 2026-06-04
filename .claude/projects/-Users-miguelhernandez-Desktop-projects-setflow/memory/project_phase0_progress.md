@@ -1,24 +1,21 @@
 ---
-name: Phase 0 progress
-description: Current build progress — Phase 0 foundation, what's done and what's next
+name: Project build progress
+description: Current build progress — Phase 0 complete, Phase 1 in progress (6/8 issues done), what's next
 type: project
 ---
 
-Phase 0 (Foundation) is in progress. Goal: skeleton running locally.
+Phase 0 (Foundation) — **complete.** All 4 issues closed (#2-#5).
 
-**Completed:**
-- Issue #2 — Postgres 16 + pgvector via docker-compose (merged to main, branch cleaned up)
-- Issue #3 — FastAPI scaffold with /health, config, DB layer, .env.example, 6 tests (PR #8 open, user reviewing)
-
-**Remaining Phase 0:**
-- Issue #4 — Anthropic + Voyage SDK integration test routes (blocked by #3)
-- Issue #5 — React + Vite + Tailwind frontend calling /health (blocked by #3)
-- Issues #4 and #5 can run in parallel once #3 is merged
-
-**Phase 0 exit criteria:** Both test routes work, frontend renders, all secrets in env vars.
-
-**After Phase 0:** User wants to start bringing in data (Phase 1). Schema/migrations issue was intentionally kept out of Phase 0 — will be the first Phase 1 issue.
+Phase 1 (Data Ingestion) — **in progress.** 6 of 8 issues done:
+- #11: Schema + Alembic migrations — done (PR #18)
+- #12: Beatport 10M dataset loader — done (PR #21)
+- #13: YouTube tracklist scraper + parser — done (PR #19)
+- #14: MixesDB API client + wiki markup parser — done (PR #20)
+- #15: Track resolution pipeline — done (PR #22)
+- #16: Transition derivation — done (PR #23)
+- #17: Seed DJ validation run (6 DJs, ~40 sets) — **next up**
+- #18: Gap filling (Mixcloud + Discogs)
 
 **Why:** User is building this as a portfolio piece for AI engineer roles. Wants clean, well-tested, incremental progress.
 
-**How to apply:** When resuming, check if PR #8 was merged. If so, clean up the issue-3 branch and move to #4 and #5 in parallel.
+**How to apply:** #17 is the next issue — run the full ingestion pipeline end-to-end on 6 seed DJs (~40 sets) to validate data quality before moving to Phase 2 (embeddings).

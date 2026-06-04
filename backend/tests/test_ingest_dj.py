@@ -5,6 +5,7 @@ import pytest
 from app.ingestion.ingest_dj import (
     ScrapedSet,
     _dedup_key,
+    _dj_name_matches,
     _make_slug,
     deduplicate_sets,
 )
@@ -108,3 +109,25 @@ class TestDeduplication:
 
     def test_empty_list(self):
         assert deduplicate_sets([]) == []
+
+
+class TestDJNameMatches:
+    def test_exact_match(self):
+        assert _dj_name_matches("ARTBAT", ["ARTBAT"]) is True
+
+    def test_case_insensitive(self):
+        assert _dj_name_matches("artbat", ["ARTBAT"]) is True
+
+    def test_in_list(self):
+        assert _dj_name_matches("ARTBAT", ["Moguai", "ARTBAT", "Alle Farben"]) is True
+
+    def test_not_in_list(self):
+        assert _dj_name_matches("ARTBAT", ["Doorly"]) is False
+        assert _dj_name_matches("ARTBAT", ["ALOK"]) is False
+
+    def test_substring_match(self):
+        """Handles cases like 'Armin van Buuren b2b ARTBAT' parsed as one name."""
+        assert _dj_name_matches("ARTBAT", ["Armin van Buuren b2b ARTBAT"]) is True
+
+    def test_empty_list(self):
+        assert _dj_name_matches("ARTBAT", []) is False
