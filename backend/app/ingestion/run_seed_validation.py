@@ -14,7 +14,7 @@ import sys
 from app.db import async_session
 from app.ingestion.coverage_report import format_report, generate_report
 from app.ingestion.ingest_dj import IngestionResult, ingest_dj
-from app.ingestion.spotify_client import SpotifyClient, SpotifyRateLimitError
+from app.ingestion.spotify_client import SpotifyClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,14 +69,6 @@ async def run_ingestion(dj_filter: str | None = None) -> list[IngestionResult]:
                         result.tracks_unresolved,
                         result.transitions_created,
                     )
-        except SpotifyRateLimitError as e:
-            logger.error(
-                "Spotify rate limit hit during %s — skipping remaining DJs. "
-                "Resume later with --dj flag. (retry after %ds)",
-                dj_info["name"],
-                e.retry_after,
-            )
-            break
         except Exception:
             logger.exception("Failed to ingest %s — continuing with next DJ", dj_info["name"])
 
