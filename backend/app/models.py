@@ -87,6 +87,19 @@ class Track(Base):
     subgenre: Mapped[str | None] = mapped_column(String(255))
     energy: Mapped[float | None] = mapped_column(Float)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1024))
+
+    # Enrichment source tracking — which API/dataset provided each field
+    bpm_source: Mapped[str | None] = mapped_column(String(20))
+    key_source: Mapped[str | None] = mapped_column(String(20))
+    genre_source: Mapped[str | None] = mapped_column(String(20))
+    subgenre_source: Mapped[str | None] = mapped_column(String(20))
+    label_source: Mapped[str | None] = mapped_column(String(20))
+
+    # External IDs from enrichment sources
+    deezer_id: Mapped[int | None] = mapped_column(Integer)
+    discogs_id: Mapped[int | None] = mapped_column(Integer)
+    musicbrainz_id: Mapped[str | None] = mapped_column(String(36))
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

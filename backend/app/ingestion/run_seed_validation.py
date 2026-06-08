@@ -82,6 +82,24 @@ async def run_report() -> str:
         return format_report(report)
 
 
+async def run_all(report_only: bool, dj_filter: str | None) -> None:
+    """Run ingestion + report in a single event loop to avoid asyncpg loop conflicts."""
+    if not report_only:
+        results = await run_ingestion(dj_filter=dj_filter)
+        print("\n" + "=" * 60)
+        print("INGESTION SUMMARY")
+        print("=" * 60)
+        for r in results:
+            print(
+                f"  {r.dj_name:25s}  sets={r.sets_persisted:2d}  "
+                f"tracks={r.tracks_resolved:4d}  unresolved={r.tracks_unresolved:3d}  "
+                f"transitions={r.transitions_created:4d}"
+            )
+
+    report = await run_report()
+    print("\n" + report)
+
+
 def main(args: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Run seed DJ validation: ingest 6 DJs and generate coverage report."
@@ -99,20 +117,7 @@ def main(args: list[str] | None = None) -> None:
     )
     parsed = parser.parse_args(args)
 
-    if not parsed.report_only:
-        results = asyncio.run(run_ingestion(dj_filter=parsed.dj))
-        print("\n" + "=" * 60)
-        print("INGESTION SUMMARY")
-        print("=" * 60)
-        for r in results:
-            print(
-                f"  {r.dj_name:25s}  sets={r.sets_persisted:2d}  "
-                f"tracks={r.tracks_resolved:4d}  unresolved={r.tracks_unresolved:3d}  "
-                f"transitions={r.transitions_created:4d}"
-            )
-
-    report = asyncio.run(run_report())
-    print("\n" + report)
+    asyncio.run(run_all(report_only=parsed.report_only, dj_filter=parsed.dj))
 
 
 if __name__ == "__main__":

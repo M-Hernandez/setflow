@@ -5,10 +5,12 @@ DB persistence (DJ/Set rows) → track resolution → transition derivation.
 """
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import date
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -232,13 +234,14 @@ async def ingest_dj(
     youtube_limit: int = 10,
     mixesdb_limit: int = 10,
     spotify: SpotifyClient | None = None,
+    httpx_client: httpx.AsyncClient | None = None,
 ) -> IngestionResult:
     """Run full ingestion pipeline for a single DJ.
 
     1. Scrape YouTube + MixesDB
     2. Deduplicate across sources
     3. Persist DJ + Set rows
-    4. Resolve tracks (Spotify + Beatport)
+    4. Resolve tracks (Spotify + Beatport + Deezer + GetSongBPM)
     5. Derive transitions
 
     Returns an IngestionResult summary.
@@ -266,52 +269,71 @@ async def ingest_dj(
     if spotify is None:
         spotify = SpotifyClient()
 
-    for scraped in deduped:
-        # Skip if already ingested
-        if await _set_exists(session, dj.id, scraped.title):
-            logger.info("Skipping already-ingested set: %s", scraped.title)
-            continue
+    getsongbpm_api_key = os.environ.get("GETSONGBPM_API_KEY")
 
-        # Create Set row
-        db_set = Set(
-            dj_id=dj.id,
-            title=scraped.title,
-            set_type=_parse_set_type(scraped.set_type),
-            is_b2b=scraped.is_b2b,
-            source_url=scraped.source_url,
-            source=scraped.source,
-            venue=scraped.venue,
-            duration_seconds=scraped.duration_seconds,
-        )
-        if scraped.event_date:
-            from datetime import datetime, timezone
-            db_set.event_date = datetime.combine(
-                scraped.event_date, datetime.min.time(), tzinfo=timezone.utc
+    # Manage httpx client lifecycle — create one if not provided
+    owns_client = httpx_client is None
+    if owns_client:
+        httpx_client = httpx.AsyncClient()
+
+    try:
+        for scraped in deduped:
+            # Skip if already ingested
+            if await _set_exists(session, dj.id, scraped.title):
+                logger.info("Skipping already-ingested set: %s", scraped.title)
+                continue
+
+            # Create Set row
+            db_set = Set(
+                dj_id=dj.id,
+                title=scraped.title,
+                set_type=_parse_set_type(scraped.set_type),
+                is_b2b=scraped.is_b2b,
+                source_url=scraped.source_url,
+                source=scraped.source,
+                venue=scraped.venue,
+                duration_seconds=scraped.duration_seconds,
             )
-        session.add(db_set)
-        await session.flush()
+            if scraped.event_date:
+                from datetime import datetime, timezone
+                db_set.event_date = datetime.combine(
+                    scraped.event_date, datetime.min.time(), tzinfo=timezone.utc
+                )
+            session.add(db_set)
+            await session.flush()
 
-        result.sets_persisted += 1
+            result.sets_persisted += 1
 
-        # Resolve tracks
-        resolution: ResolutionResult = await resolve_tracks(
-            session, scraped.tracks, db_set.id, spotify
-        )
-        result.tracks_resolved += resolution.resolved
-        result.tracks_unresolved += len(
-            [u for u in resolution.unresolved if u.reason == "no_spotify_match"]
-        )
+            # Resolve tracks (Spotify may be disabled by circuit breaker)
+            if spotify is not None and spotify.is_disabled:
+                logger.warning(
+                    "Spotify disabled (rate limit circuit breaker) — "
+                    "resolving '%s' with Beatport fuzzy match only",
+                    scraped.title,
+                )
+            resolution: ResolutionResult = await resolve_tracks(
+                session, scraped.tracks, db_set.id, spotify,
+                httpx_client=httpx_client,
+                getsongbpm_api_key=getsongbpm_api_key,
+            )
+            result.tracks_resolved += resolution.resolved
+            result.tracks_unresolved += len(
+                [u for u in resolution.unresolved if u.reason == "no_spotify_match"]
+            )
 
-        # Derive transitions
-        transitions = await derive_transitions_for_set(session, db_set.id)
-        result.transitions_created += transitions
+            # Derive transitions
+            transitions = await derive_transitions_for_set(session, db_set.id)
+            result.transitions_created += transitions
 
-        logger.info(
-            "  Set '%s': %d tracks resolved, %d unresolved, %d transitions",
-            scraped.title,
-            resolution.resolved,
-            len(resolution.unresolved),
-            transitions,
-        )
+            logger.info(
+                "  Set '%s': %d tracks resolved, %d unresolved, %d transitions",
+                scraped.title,
+                resolution.resolved,
+                len(resolution.unresolved),
+                transitions,
+            )
+    finally:
+        if owns_client:
+            await httpx_client.aclose()
 
     return result
