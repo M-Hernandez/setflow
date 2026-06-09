@@ -270,6 +270,7 @@ async def ingest_dj(
         spotify = SpotifyClient()
 
     getsongbpm_api_key = os.environ.get("GETSONGBPM_API_KEY")
+    discogs_token = os.environ.get("DISCOGS_TOKEN")
 
     # Manage httpx client lifecycle — create one if not provided
     owns_client = httpx_client is None
@@ -315,6 +316,7 @@ async def ingest_dj(
                 session, scraped.tracks, db_set.id, spotify,
                 httpx_client=httpx_client,
                 getsongbpm_api_key=getsongbpm_api_key,
+                discogs_token=discogs_token,
             )
             result.tracks_resolved += resolution.resolved
             result.tracks_unresolved += len(

@@ -22,6 +22,8 @@ from app.ingestion.beatport_lookup import BeatportMatch, fuzzy_match, lookup_by_
 from app.ingestion.canonicalize import canonicalize_track
 from app.ingestion.deezer_lookup import DeezerMatch
 from app.ingestion.deezer_lookup import lookup_by_isrc as deezer_lookup_by_isrc
+from app.ingestion.discogs_lookup import DiscogsMatch, search_label_styles, search_track as discogs_search_track
+from app.ingestion.genre_mapping import map_styles_to_subgenre
 from app.ingestion.getsongbpm_lookup import GetSongBPMMatch
 from app.ingestion.getsongbpm_lookup import search as getsongbpm_search
 from app.ingestion.parse_tracklist import ParsedTrack
@@ -133,17 +135,39 @@ def _apply_getsongbpm_enrichment(track: Track, gs: GetSongBPMMatch) -> None:
         track.key_source = "getsongbpm"
 
 
+def _apply_discogs_enrichment(track: Track, dg: DiscogsMatch) -> None:
+    """Apply Discogs metadata to a Track, only filling empty fields.
+
+    Maps Discogs styles to Beatport subgenre/genre via genre_mapping.
+    """
+    if not track.discogs_id:
+        track.discogs_id = dg.discogs_id
+    if dg.label and not track.label:
+        track.label = dg.label
+        track.label_source = "discogs"
+    if dg.styles and (not track.subgenre or not track.genre):
+        subgenre, genre = map_styles_to_subgenre(dg.styles)
+        if subgenre and not track.subgenre:
+            track.subgenre = subgenre
+            track.subgenre_source = "discogs"
+        if genre and not track.genre:
+            track.genre = genre
+            track.genre_source = "discogs"
+
+
 async def resolve_track(
     session: AsyncSession,
     parsed: ParsedTrack,
     spotify: SpotifyClient | None,
     httpx_client: httpx.AsyncClient | None = None,
     getsongbpm_api_key: str | None = None,
+    discogs_token: str | None = None,
 ) -> tuple[Track, UnresolvedTrack | None]:
     """Resolve a single parsed track to an enriched Track row.
 
     Always returns a Track (never None). Enrichment is best-effort:
-    Spotify → Beatport ISRC → Beatport fuzzy → Deezer BPM → GetSongBPM.
+    Spotify → Beatport ISRC → Beatport fuzzy → Deezer BPM → GetSongBPM
+    → Discogs genre/subgenre/label.
 
     Returns (track, None) on full enrichment, or (track, unresolved)
     when some enrichment source failed.
@@ -232,6 +256,24 @@ async def resolve_track(
                 c_artist, c_title, getsongbpm_result.bpm, getsongbpm_result.key,
             )
 
+    # Gap filling: Discogs (artist + title → genre/subgenre/label)
+    if (track.genre is None or track.subgenre is None or track.label is None) and httpx_client is not None:
+        discogs_result = await discogs_search_track(
+            httpx_client, c_artist, c_title, discogs_token
+        )
+        # Label fallback: if track-level search missed, search by artist
+        if discogs_result is None or not discogs_result.styles:
+            discogs_result = await search_label_styles(
+                httpx_client, c_artist, discogs_token
+            )
+        if discogs_result:
+            _apply_discogs_enrichment(track, discogs_result)
+            logger.debug(
+                "Discogs filled gaps for '%s - %s': styles=%s label=%s (%s)",
+                c_artist, c_title, discogs_result.styles,
+                discogs_result.label, discogs_result.match_method,
+            )
+
     # Track is unresolved if it has no BPM and no genre (no enrichment landed)
     unresolved: UnresolvedTrack | None = None
     if not beatport and track.bpm is None:
@@ -254,6 +296,7 @@ async def resolve_tracks(
     spotify: SpotifyClient | None,
     httpx_client: httpx.AsyncClient | None = None,
     getsongbpm_api_key: str | None = None,
+    discogs_token: str | None = None,
 ) -> ResolutionResult:
     """Resolve a list of parsed tracks and link them to a set.
 
@@ -266,7 +309,8 @@ async def resolve_tracks(
 
     for parsed in parsed_tracks:
         track, unresolved = await resolve_track(
-            session, parsed, spotify, httpx_client, getsongbpm_api_key
+            session, parsed, spotify, httpx_client,
+            getsongbpm_api_key, discogs_token,
         )
 
         # Flush to get track.id if it's new

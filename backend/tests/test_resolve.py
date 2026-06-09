@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.ingestion.deezer_lookup import DeezerMatch
+from app.ingestion.discogs_lookup import DiscogsMatch
 from app.ingestion.getsongbpm_lookup import GetSongBPMMatch
 from app.ingestion.parse_tracklist import ParsedTrack
 from app.ingestion.resolve import (
@@ -507,3 +508,153 @@ class TestGapFilling:
         mock_deezer.assert_not_called()
         assert track.bpm == 122.0
         assert track.bpm_source == "beatport"
+
+
+class TestDiscogsGapFilling:
+    """Tests for Discogs genre/subgenre/label gap-filling enrichment."""
+
+    async def test_discogs_fills_genre_and_label(self, db_session):
+        """Discogs fills genre/subgenre/label when Beatport has no match."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:dg1", isrc=None,
+        )
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed(artist="ZZZDiscogsArtist", title="ZZZ Discogs Track")
+
+        with patch(
+            "app.ingestion.resolve.discogs_search_track",
+            new_callable=AsyncMock,
+            return_value=DiscogsMatch(
+                discogs_id=55555,
+                styles=["Tech House", "Deep House"],
+                label="Innervisions",
+                year=2022,
+                match_method="track",
+            ),
+        ) as mock_discogs:
+            track, _ = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+            )
+
+        mock_discogs.assert_called_once()
+        assert track.discogs_id == 55555
+        assert track.subgenre == "Tech House"
+        assert track.subgenre_source == "discogs"
+        assert track.genre == "Tech House"
+        assert track.genre_source == "discogs"
+        assert track.label == "Innervisions"
+        assert track.label_source == "discogs"
+
+    async def test_discogs_label_fallback(self, db_session):
+        """Label fallback fires when track-level search returns no styles."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:dglf", isrc=None,
+        )
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed(artist="ZZZFallbackArtist", title="ZZZ Fallback Track")
+
+        with patch(
+            "app.ingestion.resolve.discogs_search_track",
+            new_callable=AsyncMock,
+            return_value=None,  # Track search fails
+        ), patch(
+            "app.ingestion.resolve.search_label_styles",
+            new_callable=AsyncMock,
+            return_value=DiscogsMatch(
+                discogs_id=66666,
+                styles=["Deep House", "Downtempo"],
+                label="Diynamic",
+                year=None,
+                match_method="label_fallback",
+            ),
+        ) as mock_label:
+            track, _ = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+            )
+
+        mock_label.assert_called_once()
+        assert track.subgenre == "Deep House"
+        assert track.genre == "House"
+        assert track.label == "Diynamic"
+
+    async def test_discogs_skipped_when_beatport_filled_genre(self, db_session, beatport_data):
+        """When Beatport fills genre/subgenre/label, Discogs is not called."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result()
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed()
+
+        with patch(
+            "app.ingestion.resolve.discogs_search_track",
+            new_callable=AsyncMock,
+        ) as mock_discogs:
+            track, _ = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+            )
+
+        mock_discogs.assert_not_called()
+        assert track.genre_source == "beatport"
+
+    async def test_discogs_skipped_without_httpx_client(self, db_session):
+        """Discogs is skipped when no httpx_client provided."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:nohttpx2", isrc=None,
+        )
+
+        parsed = _make_parsed(artist="ZZZNoHttpx2", title="ZZZ NoHttpx2 Track")
+
+        with patch(
+            "app.ingestion.resolve.discogs_search_track",
+            new_callable=AsyncMock,
+        ) as mock_discogs:
+            track, _ = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=None,
+            )
+
+        mock_discogs.assert_not_called()
+
+    async def test_discogs_token_passed_through(self, db_session):
+        """Discogs token is forwarded to the API calls."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:dgtoken", isrc=None,
+        )
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed(artist="ZZZTokenArtist", title="ZZZ Token Track")
+
+        with patch(
+            "app.ingestion.resolve.discogs_search_track",
+            new_callable=AsyncMock,
+            return_value=DiscogsMatch(
+                discogs_id=77777,
+                styles=["Techno"],
+                label="Afterlife",
+                year=2023,
+                match_method="track",
+            ),
+        ) as mock_discogs:
+            await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+                discogs_token="my-test-token",
+            )
+
+        mock_discogs.assert_called_once_with(
+            httpx_client, "zzztokenartist", "zzz token track", "my-test-token"
+        )
