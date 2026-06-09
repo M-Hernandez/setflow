@@ -117,9 +117,9 @@ See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATAB
 - #15: Track resolution pipeline — **done** (PR #22, merged)
 - #16: Transition derivation — **done** (PR #23, merged)
 - #17: Seed DJ validation run (6 DJs, ~40 sets) — **done** (PR #24, merged)
-- #18: Gap filling — **in progress** (PR #25, merged: Deezer + GetSongBPM + genre mapping + source tracking + Spotify circuit breaker. Remaining: Discogs client, Mixcloud client, integration wiring, coverage re-run)
+- #18: Gap filling — **in progress** (PR #25: Deezer + GetSongBPM + source tracking; PR #26: Discogs client + label fallback. Remaining: Mixcloud client (deferrable), coverage re-run)
 
-**Next:** Finish #18 — build Discogs API client for genre/subgenre/label gap filling, wire into resolve pipeline, then re-run seed validation to check coverage gates. Mixcloud client can be deferred if Discogs coverage is sufficient.
+**Next:** Re-run seed validation to measure coverage improvement from gap filling. Mixcloud client can be deferred if coverage gates are met. Then Phase 2 (embeddings).
 
 ## Custom skills
 

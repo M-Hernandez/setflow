@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     voyage_api_key: str = ""
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
+    getsongbpm_api_key: str = ""
+    discogs_token: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

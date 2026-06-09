@@ -269,8 +269,9 @@ async def ingest_dj(
     if spotify is None:
         spotify = SpotifyClient()
 
-    getsongbpm_api_key = os.environ.get("GETSONGBPM_API_KEY")
-    discogs_token = os.environ.get("DISCOGS_TOKEN")
+    from app.config import settings
+    getsongbpm_api_key = settings.getsongbpm_api_key or None
+    discogs_token = settings.discogs_token or None
 
     # Manage httpx client lifecycle — create one if not provided
     owns_client = httpx_client is None
