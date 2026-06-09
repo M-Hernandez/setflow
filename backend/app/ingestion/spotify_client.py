@@ -42,7 +42,12 @@ MIN_REQUEST_INTERVAL = 1.0
 
 
 class SpotifyClient:
-    """Thin wrapper around spotipy with caching and rate-limit handling."""
+    """Thin wrapper around spotipy with caching and rate-limit handling.
+
+    Circuit-breaker: once a hard rate limit is hit (retry-after > MAX_RATE_LIMIT_WAIT),
+    the client disables itself for the rest of the session. All subsequent search_track()
+    calls return None immediately instead of burning API calls.
+    """
 
     def __init__(self) -> None:
         auth_manager = SpotifyClientCredentials(
@@ -55,6 +60,12 @@ class SpotifyClient:
         )
         self._cache: dict[str, SpotifyResult | None] = {}
         self._last_request_time: float = 0.0
+        self._circuit_open: bool = False
+
+    @property
+    def is_disabled(self) -> bool:
+        """True if the client has been disabled by a rate limit circuit breaker."""
+        return self._circuit_open
 
     def search_track(
         self,
@@ -67,7 +78,12 @@ class SpotifyClient:
 
         Returns SpotifyResult on match, None if no result found.
         Handles 429 rate limiting with exponential backoff.
+        Once a hard rate limit is hit, circuit-breaks and returns None for all
+        subsequent calls.
         """
+        if self._circuit_open:
+            return None
+
         query = f"artist:{artist} track:{title}"
         if remix:
             query = f"artist:{artist} track:{title} {remix}"
@@ -86,9 +102,11 @@ class SpotifyClient:
                     retry_after = int(e.headers.get("Retry-After", 2 ** attempt))
                     if retry_after > MAX_RATE_LIMIT_WAIT:
                         logger.error(
-                            "Spotify rate limit too long (%ds), aborting",
+                            "Spotify rate limit hit (%ds retry-after) — "
+                            "circuit breaker OPEN, disabling Spotify for this session",
                             retry_after,
                         )
+                        self._circuit_open = True
                         raise SpotifyRateLimitError(retry_after)
                     logger.warning(
                         "Spotify rate limited, retrying in %ds (attempt %d/%d)",
@@ -102,7 +120,12 @@ class SpotifyClient:
                     self._cache[query] = None
                     return None
         else:
-            logger.error("Spotify rate limit retries exhausted for query: %s", query)
+            # All retries exhausted with short waits — open circuit breaker
+            logger.error(
+                "Spotify rate limit retries exhausted — "
+                "circuit breaker OPEN, disabling Spotify for this session"
+            )
+            self._circuit_open = True
             self._cache[query] = None
             return None
 

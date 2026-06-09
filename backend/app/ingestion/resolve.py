@@ -14,11 +14,16 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ingestion.beatport_lookup import BeatportMatch, fuzzy_match, lookup_by_isrc
 from app.ingestion.canonicalize import canonicalize_track
+from app.ingestion.deezer_lookup import DeezerMatch
+from app.ingestion.deezer_lookup import lookup_by_isrc as deezer_lookup_by_isrc
+from app.ingestion.getsongbpm_lookup import GetSongBPMMatch
+from app.ingestion.getsongbpm_lookup import search as getsongbpm_search
 from app.ingestion.parse_tracklist import ParsedTrack
 from app.ingestion.spotify_client import SpotifyClient, SpotifyRateLimitError, SpotifyResult
 from app.models import SetTrack, Track
@@ -94,25 +99,51 @@ def _apply_beatport_enrichment(track: Track, bp: BeatportMatch) -> None:
         track.beatport_id = bp.beatport_id
     if bp.bpm is not None and track.bpm is None:
         track.bpm = float(bp.bpm)
+        track.bpm_source = "beatport"
     if bp.key and not track.key:
         track.key = bp.key
+        track.key_source = "beatport"
     if bp.genre and not track.genre:
         track.genre = bp.genre
+        track.genre_source = "beatport"
     if bp.subgenre and not track.subgenre:
         track.subgenre = bp.subgenre
+        track.subgenre_source = "beatport"
     if bp.label and not track.label:
         track.label = bp.label
+        track.label_source = "beatport"
+
+
+def _apply_deezer_enrichment(track: Track, dz: DeezerMatch) -> None:
+    """Apply Deezer metadata to a Track, only filling empty fields."""
+    if not track.deezer_id:
+        track.deezer_id = dz.deezer_id
+    if dz.bpm is not None and track.bpm is None:
+        track.bpm = dz.bpm
+        track.bpm_source = "deezer"
+
+
+def _apply_getsongbpm_enrichment(track: Track, gs: GetSongBPMMatch) -> None:
+    """Apply GetSongBPM metadata to a Track, only filling empty fields."""
+    if gs.bpm is not None and track.bpm is None:
+        track.bpm = gs.bpm
+        track.bpm_source = "getsongbpm"
+    if gs.key and not track.key:
+        track.key = gs.key
+        track.key_source = "getsongbpm"
 
 
 async def resolve_track(
     session: AsyncSession,
     parsed: ParsedTrack,
     spotify: SpotifyClient | None,
+    httpx_client: httpx.AsyncClient | None = None,
+    getsongbpm_api_key: str | None = None,
 ) -> tuple[Track, UnresolvedTrack | None]:
     """Resolve a single parsed track to an enriched Track row.
 
     Always returns a Track (never None). Enrichment is best-effort:
-    Spotify → Beatport ISRC → Beatport fuzzy → save with nulls.
+    Spotify → Beatport ISRC → Beatport fuzzy → Deezer BPM → GetSongBPM.
 
     Returns (track, None) on full enrichment, or (track, unresolved)
     when some enrichment source failed.
@@ -124,9 +155,9 @@ async def resolve_track(
     # Step 1: Check for existing track by identity
     existing = await _find_existing_track(session, c_artist, c_title, c_remix)
 
-    # Step 2: Search Spotify (best-effort)
+    # Step 2: Search Spotify (best-effort, skipped if circuit breaker is open)
     spotify_result: SpotifyResult | None = None
-    if spotify is not None:
+    if spotify is not None and not spotify.is_disabled:
         try:
             spotify_result = spotify.search_track(
                 parsed.artist, parsed.title, parsed.remix
@@ -136,8 +167,8 @@ async def resolve_track(
                 spotify_result = spotify.search_track(parsed.artist, parsed.title, None)
         except SpotifyRateLimitError:
             logger.warning(
-                "Spotify rate limited — continuing without Spotify for track: %s - %s",
-                parsed.artist, parsed.title,
+                "Spotify circuit breaker tripped — all remaining tracks in this "
+                "session will resolve without Spotify"
             )
 
     # Step 2b: Deduplicate by ISRC or Spotify URI
@@ -176,10 +207,34 @@ async def resolve_track(
         session.add(track)
 
     # Apply Beatport enrichment
-    unresolved: UnresolvedTrack | None = None
     if beatport:
         _apply_beatport_enrichment(track, beatport)
-    else:
+
+    # Gap filling: Deezer BPM (requires ISRC)
+    if track.bpm is None and track.isrc and httpx_client is not None:
+        deezer_result = await deezer_lookup_by_isrc(httpx_client, track.isrc)
+        if deezer_result:
+            _apply_deezer_enrichment(track, deezer_result)
+            logger.debug(
+                "Deezer filled BPM for '%s - %s': %.1f",
+                c_artist, c_title, deezer_result.bpm or 0,
+            )
+
+    # Gap filling: GetSongBPM (artist + title → BPM + key)
+    if (track.bpm is None or track.key is None) and httpx_client is not None and getsongbpm_api_key:
+        getsongbpm_result = await getsongbpm_search(
+            httpx_client, c_artist, c_title, getsongbpm_api_key
+        )
+        if getsongbpm_result:
+            _apply_getsongbpm_enrichment(track, getsongbpm_result)
+            logger.debug(
+                "GetSongBPM filled gaps for '%s - %s': bpm=%s key=%s",
+                c_artist, c_title, getsongbpm_result.bpm, getsongbpm_result.key,
+            )
+
+    # Track is unresolved if it has no BPM and no genre (no enrichment landed)
+    unresolved: UnresolvedTrack | None = None
+    if not beatport and track.bpm is None:
         reason = "no_enrichment" if spotify_result is None else "no_beatport_match"
         unresolved = UnresolvedTrack(
             artist=parsed.artist,
@@ -197,6 +252,8 @@ async def resolve_tracks(
     parsed_tracks: list[ParsedTrack],
     set_id: int,
     spotify: SpotifyClient | None,
+    httpx_client: httpx.AsyncClient | None = None,
+    getsongbpm_api_key: str | None = None,
 ) -> ResolutionResult:
     """Resolve a list of parsed tracks and link them to a set.
 
@@ -208,7 +265,9 @@ async def resolve_tracks(
     result = ResolutionResult()
 
     for parsed in parsed_tracks:
-        track, unresolved = await resolve_track(session, parsed, spotify)
+        track, unresolved = await resolve_track(
+            session, parsed, spotify, httpx_client, getsongbpm_api_key
+        )
 
         # Flush to get track.id if it's new
         await session.flush()

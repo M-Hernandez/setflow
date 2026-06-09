@@ -1,10 +1,12 @@
 """Tests for the track resolution pipeline."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
 
+from app.ingestion.deezer_lookup import DeezerMatch
+from app.ingestion.getsongbpm_lookup import GetSongBPMMatch
 from app.ingestion.parse_tracklist import ParsedTrack
 from app.ingestion.resolve import (
     ResolutionResult,
@@ -309,3 +311,199 @@ class TestResolveTracks:
         )
         set_track = row.scalar_one()
         assert set_track.start_time_seconds is None
+
+
+class TestGapFilling:
+    """Tests for Deezer + GetSongBPM gap-filling enrichment."""
+
+    async def test_deezer_fills_bpm_when_beatport_missing(self, db_session):
+        """Deezer ISRC lookup fills BPM when Beatport has no match."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:dz1", isrc="DEEZERTEST01",
+        )
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed(artist="ZZZDeezerArtist", title="ZZZ Deezer Track")
+
+        with patch(
+            "app.ingestion.resolve.deezer_lookup_by_isrc",
+            new_callable=AsyncMock,
+            return_value=DeezerMatch(deezer_id=12345, bpm=128.0),
+        ) as mock_deezer:
+            track, unresolved = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+            )
+
+        mock_deezer.assert_called_once_with(httpx_client, "DEEZERTEST01")
+        assert track.bpm == 128.0
+        assert track.bpm_source == "deezer"
+        assert track.deezer_id == 12345
+        # BPM filled → not unresolved
+        assert unresolved is None
+
+    async def test_getsongbpm_fills_bpm_and_key(self, db_session):
+        """GetSongBPM fills BPM + key when Beatport and Deezer miss."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:gs1", isrc=None,  # No ISRC → Deezer won't fire
+        )
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed(artist="ZZZGsBpmArtist", title="ZZZ GsBpm Track")
+
+        with patch(
+            "app.ingestion.resolve.getsongbpm_search",
+            new_callable=AsyncMock,
+            return_value=GetSongBPMMatch(bpm=126.0, key="A Minor"),
+        ) as mock_gs:
+            track, unresolved = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+                getsongbpm_api_key="test-key",
+            )
+
+        mock_gs.assert_called_once()
+        assert track.bpm == 126.0
+        assert track.bpm_source == "getsongbpm"
+        assert track.key == "A Minor"
+        assert track.key_source == "getsongbpm"
+        assert unresolved is None
+
+    async def test_getsongbpm_fills_key_when_deezer_filled_bpm(self, db_session):
+        """GetSongBPM fills key when Deezer already filled BPM."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:combo1", isrc="COMBOISRC001",
+        )
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed(artist="ZZZComboArtist", title="ZZZ Combo Track")
+
+        with patch(
+            "app.ingestion.resolve.deezer_lookup_by_isrc",
+            new_callable=AsyncMock,
+            return_value=DeezerMatch(deezer_id=99999, bpm=130.0),
+        ), patch(
+            "app.ingestion.resolve.getsongbpm_search",
+            new_callable=AsyncMock,
+            return_value=GetSongBPMMatch(bpm=131.0, key="C Minor"),
+        ) as mock_gs:
+            track, _ = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+                getsongbpm_api_key="test-key",
+            )
+
+        # Deezer BPM wins (applied first)
+        assert track.bpm == 130.0
+        assert track.bpm_source == "deezer"
+        # GetSongBPM fills the key gap
+        mock_gs.assert_called_once()
+        assert track.key == "C Minor"
+        assert track.key_source == "getsongbpm"
+
+    async def test_beatport_source_tracking(self, db_session, beatport_data, mock_spotify):
+        """Beatport enrichment sets source tracking fields."""
+        parsed = _make_parsed()
+        track, _ = await resolve_track(db_session, parsed, mock_spotify)
+
+        assert track.bpm_source == "beatport"
+        assert track.key_source == "beatport"
+        assert track.genre_source == "beatport"
+        assert track.subgenre_source == "beatport"
+        assert track.label_source == "beatport"
+
+    async def test_no_gap_filling_without_httpx_client(self, db_session):
+        """Gap filling is skipped when no httpx_client is provided."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:nohttpx", isrc="NOHTTPXISR01",
+        )
+
+        parsed = _make_parsed(artist="ZZZNoHttpxArtist", title="ZZZ NoHttpx Track")
+
+        with patch(
+            "app.ingestion.resolve.deezer_lookup_by_isrc",
+            new_callable=AsyncMock,
+        ) as mock_deezer:
+            track, unresolved = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=None,
+            )
+
+        mock_deezer.assert_not_called()
+        assert track.bpm is None
+        assert unresolved is not None
+
+    async def test_no_getsongbpm_without_api_key(self, db_session):
+        """GetSongBPM is skipped when no API key is provided."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:nokey", isrc=None,
+        )
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed(artist="ZZZNoKeyArtist", title="ZZZ NoKey Track")
+
+        with patch(
+            "app.ingestion.resolve.getsongbpm_search",
+            new_callable=AsyncMock,
+        ) as mock_gs:
+            track, _ = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+                getsongbpm_api_key=None,
+            )
+
+        mock_gs.assert_not_called()
+
+    async def test_deezer_skipped_when_no_isrc(self, db_session):
+        """Deezer lookup is skipped when track has no ISRC."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result(
+            uri="spotify:track:noisrc", isrc=None,
+        )
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed(artist="ZZZNoIsrcArtist", title="ZZZ NoIsrc Track")
+
+        with patch(
+            "app.ingestion.resolve.deezer_lookup_by_isrc",
+            new_callable=AsyncMock,
+        ) as mock_deezer:
+            track, _ = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+            )
+
+        mock_deezer.assert_not_called()
+
+    async def test_beatport_bpm_prevents_deezer_call(self, db_session, beatport_data):
+        """When Beatport fills BPM, Deezer is not called."""
+        mock_spotify = MagicMock()
+        mock_spotify.is_disabled = False
+        mock_spotify.search_track.return_value = _make_spotify_result()
+
+        httpx_client = MagicMock()
+        parsed = _make_parsed()
+
+        with patch(
+            "app.ingestion.resolve.deezer_lookup_by_isrc",
+            new_callable=AsyncMock,
+        ) as mock_deezer:
+            track, _ = await resolve_track(
+                db_session, parsed, mock_spotify,
+                httpx_client=httpx_client,
+            )
+
+        mock_deezer.assert_not_called()
+        assert track.bpm == 122.0
+        assert track.bpm_source == "beatport"
