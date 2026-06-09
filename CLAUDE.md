@@ -99,7 +99,7 @@ Items that are fine for local dev but must be addressed before deploy:
 
 ## Environment variables
 
-See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATABASE_URL`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`.
+See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATABASE_URL`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`. Optional: `GETSONGBPM_API_KEY` (enables GetSongBPM gap filling for BPM + key).
 
 ## Current state
 
@@ -117,9 +117,9 @@ See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATAB
 - #15: Track resolution pipeline — **done** (PR #22, merged)
 - #16: Transition derivation — **done** (PR #23, merged)
 - #17: Seed DJ validation run (6 DJs, ~40 sets) — **done** (PR #24, merged)
-- #18: Gap filling (Mixcloud + Discogs)
+- #18: Gap filling — **in progress** (PR #25, merged: Deezer + GetSongBPM + genre mapping + source tracking + Spotify circuit breaker. Remaining: Discogs client, Mixcloud client, integration wiring, coverage re-run)
 
-**Next:** #18 (gap filling) — Mixcloud + Discogs enrichment for tracks missing BPM/key/subgenre. Then run seed validation again to check coverage gates.
+**Next:** Finish #18 — build Discogs API client for genre/subgenre/label gap filling, wire into resolve pipeline, then re-run seed validation to check coverage gates. Mixcloud client can be deferred if Discogs coverage is sufficient.
 
 ## Custom skills
 
