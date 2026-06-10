@@ -85,6 +85,7 @@ async def beatport_data(db_session):
 @pytest.fixture
 def mock_spotify():
     mock = MagicMock()
+    mock.is_disabled = False
     mock.search_track = MagicMock(return_value=_make_spotify_result())
     return mock
 
@@ -106,6 +107,7 @@ class TestResolveTrack:
     async def test_no_spotify_falls_through_to_beatport(self, db_session, beatport_data):
         """No Spotify result → still resolves via Beatport fuzzy match."""
         mock = MagicMock()
+        mock.is_disabled = False
         mock.search_track = MagicMock(return_value=None)
 
         parsed = _make_parsed()
@@ -120,6 +122,7 @@ class TestResolveTrack:
     async def test_no_spotify_no_beatport_still_saves(self, db_session):
         """No Spotify + no Beatport → track saved with nulls for backfill."""
         mock = MagicMock()
+        mock.is_disabled = False
         mock.search_track = MagicMock(return_value=None)
 
         parsed = _make_parsed(artist="ZZZNoMatchArtist", title="ZZZ Totally Unknown")
@@ -135,6 +138,7 @@ class TestResolveTrack:
     async def test_rate_limit_degrades_to_beatport(self, db_session, beatport_data):
         """SpotifyRateLimitError → continues with Beatport-only resolution."""
         mock = MagicMock()
+        mock.is_disabled = False
         mock.search_track = MagicMock(side_effect=SpotifyRateLimitError(86400))
 
         parsed = _make_parsed()
@@ -255,6 +259,7 @@ class TestResolveTracks:
         """Tracks with no Spotify + no Beatport match still get saved with SetTrack."""
         _, s = dj_and_set
         mock = MagicMock()
+        mock.is_disabled = False
         mock.search_track.return_value = None
 
         parsed_tracks = [_make_parsed(
@@ -328,11 +333,15 @@ class TestGapFilling:
         httpx_client = MagicMock()
         parsed = _make_parsed(artist="ZZZDeezerArtist", title="ZZZ Deezer Track")
 
-        with patch(
-            "app.ingestion.resolve.deezer_lookup_by_isrc",
-            new_callable=AsyncMock,
-            return_value=DeezerMatch(deezer_id=12345, bpm=128.0),
-        ) as mock_deezer:
+        with (
+            patch(
+                "app.ingestion.resolve.deezer_lookup_by_isrc",
+                new_callable=AsyncMock,
+                return_value=DeezerMatch(deezer_id=12345, bpm=128.0),
+            ) as mock_deezer,
+            patch("app.ingestion.resolve.discogs_search_track", new_callable=AsyncMock, return_value=None),
+            patch("app.ingestion.resolve.search_label_styles", new_callable=AsyncMock, return_value=None),
+        ):
             track, unresolved = await resolve_track(
                 db_session, parsed, mock_spotify,
                 httpx_client=httpx_client,
@@ -356,11 +365,15 @@ class TestGapFilling:
         httpx_client = MagicMock()
         parsed = _make_parsed(artist="ZZZGsBpmArtist", title="ZZZ GsBpm Track")
 
-        with patch(
-            "app.ingestion.resolve.getsongbpm_search",
-            new_callable=AsyncMock,
-            return_value=GetSongBPMMatch(bpm=126.0, key="A Minor"),
-        ) as mock_gs:
+        with (
+            patch(
+                "app.ingestion.resolve.getsongbpm_search",
+                new_callable=AsyncMock,
+                return_value=GetSongBPMMatch(bpm=126.0, key="A Minor"),
+            ) as mock_gs,
+            patch("app.ingestion.resolve.discogs_search_track", new_callable=AsyncMock, return_value=None),
+            patch("app.ingestion.resolve.search_label_styles", new_callable=AsyncMock, return_value=None),
+        ):
             track, unresolved = await resolve_track(
                 db_session, parsed, mock_spotify,
                 httpx_client=httpx_client,
@@ -385,15 +398,20 @@ class TestGapFilling:
         httpx_client = MagicMock()
         parsed = _make_parsed(artist="ZZZComboArtist", title="ZZZ Combo Track")
 
-        with patch(
-            "app.ingestion.resolve.deezer_lookup_by_isrc",
-            new_callable=AsyncMock,
-            return_value=DeezerMatch(deezer_id=99999, bpm=130.0),
-        ), patch(
-            "app.ingestion.resolve.getsongbpm_search",
-            new_callable=AsyncMock,
-            return_value=GetSongBPMMatch(bpm=131.0, key="C Minor"),
-        ) as mock_gs:
+        with (
+            patch(
+                "app.ingestion.resolve.deezer_lookup_by_isrc",
+                new_callable=AsyncMock,
+                return_value=DeezerMatch(deezer_id=99999, bpm=130.0),
+            ),
+            patch(
+                "app.ingestion.resolve.getsongbpm_search",
+                new_callable=AsyncMock,
+                return_value=GetSongBPMMatch(bpm=131.0, key="C Minor"),
+            ) as mock_gs,
+            patch("app.ingestion.resolve.discogs_search_track", new_callable=AsyncMock, return_value=None),
+            patch("app.ingestion.resolve.search_label_styles", new_callable=AsyncMock, return_value=None),
+        ):
             track, _ = await resolve_track(
                 db_session, parsed, mock_spotify,
                 httpx_client=httpx_client,
@@ -453,10 +471,11 @@ class TestGapFilling:
         httpx_client = MagicMock()
         parsed = _make_parsed(artist="ZZZNoKeyArtist", title="ZZZ NoKey Track")
 
-        with patch(
-            "app.ingestion.resolve.getsongbpm_search",
-            new_callable=AsyncMock,
-        ) as mock_gs:
+        with (
+            patch("app.ingestion.resolve.getsongbpm_search", new_callable=AsyncMock) as mock_gs,
+            patch("app.ingestion.resolve.discogs_search_track", new_callable=AsyncMock, return_value=None),
+            patch("app.ingestion.resolve.search_label_styles", new_callable=AsyncMock, return_value=None),
+        ):
             track, _ = await resolve_track(
                 db_session, parsed, mock_spotify,
                 httpx_client=httpx_client,
@@ -476,10 +495,11 @@ class TestGapFilling:
         httpx_client = MagicMock()
         parsed = _make_parsed(artist="ZZZNoIsrcArtist", title="ZZZ NoIsrc Track")
 
-        with patch(
-            "app.ingestion.resolve.deezer_lookup_by_isrc",
-            new_callable=AsyncMock,
-        ) as mock_deezer:
+        with (
+            patch("app.ingestion.resolve.deezer_lookup_by_isrc", new_callable=AsyncMock) as mock_deezer,
+            patch("app.ingestion.resolve.discogs_search_track", new_callable=AsyncMock, return_value=None),
+            patch("app.ingestion.resolve.search_label_styles", new_callable=AsyncMock, return_value=None),
+        ):
             track, _ = await resolve_track(
                 db_session, parsed, mock_spotify,
                 httpx_client=httpx_client,

@@ -189,10 +189,11 @@ async def resolve_track(
             # Fallback: if remix is "Extended Mix", retry without it
             if spotify_result is None and parsed.remix and _EXTENDED_MIX_RE.match(parsed.remix):
                 spotify_result = spotify.search_track(parsed.artist, parsed.title, None)
-        except SpotifyRateLimitError:
+        except SpotifyRateLimitError as e:
             logger.warning(
-                "Spotify circuit breaker tripped — all remaining tracks in this "
-                "session will resolve without Spotify"
+                "Spotify request limit ban (%ds) — remaining tracks in this "
+                "session will resolve without Spotify",
+                e.retry_after,
             )
 
     # Step 2b: Deduplicate by ISRC or Spotify URI
