@@ -117,11 +117,11 @@ See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATAB
 - #15: Track resolution pipeline — **done** (PR #22, merged)
 - #16: Transition derivation — **done** (PR #23, merged)
 - #17: Seed DJ validation run (6 DJs, ~40 sets) — **done** (PR #24, merged)
-- #18: Gap filling — **in progress** (PR #25: Deezer + GetSongBPM + source tracking; PR #26: Discogs client + label fallback; PR #27: backfill script + config centralization. Remaining: GetSongBPM API key for BPM/key coverage, Mixcloud client (deferrable))
+- #18: Gap filling — **in progress** (PR #25: Deezer + GetSongBPM + source tracking; PR #26: Discogs client + label fallback; PR #27: backfill script + config centralization; PR #28: Spotify circuit breaker fix. Remaining: GetSongBPM API key for BPM/key coverage, Spotify retry pass for Adam Beyer, Mixcloud client (deferrable))
 
-**Coverage after backfill (873 tracks):** BPM 37%, key 35%, genre 79%, subgenre 76%, label 84%. Gates not yet met — BPM/key need GetSongBPM API key. Genre/subgenre/label significantly improved by Discogs (638 tracks filled).
+**Coverage after backfill (873 tracks):** BPM 37%, key 35%, genre 79%, subgenre 76%, label 84%. Gates not yet met — BPM/key need GetSongBPM API key. Genre/subgenre/label significantly improved by Discogs (638 tracks filled). Spotify URI at 48% (Adam Beyer 0% due to circuit breaker, now fixed in PR #28).
 
-**Next:** Get GetSongBPM API key to fill BPM/key gap (~550 tracks). Mixcloud client deferrable. Then Phase 2 (embeddings).
+**Next:** Re-run Spotify resolution for Adam Beyer (190 tracks). Get GetSongBPM API key to fill BPM/key gap (~550 tracks). Explore Soundcharts Audio Features API (1000 free lookups for BPM/key by ISRC). Then Phase 2 (embeddings).
 
 ## Custom skills
 
