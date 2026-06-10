@@ -117,9 +117,11 @@ See `.env.example`. Required keys: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `DATAB
 - #15: Track resolution pipeline — **done** (PR #22, merged)
 - #16: Transition derivation — **done** (PR #23, merged)
 - #17: Seed DJ validation run (6 DJs, ~40 sets) — **done** (PR #24, merged)
-- #18: Gap filling — **in progress** (PR #25: Deezer + GetSongBPM + source tracking; PR #26: Discogs client + label fallback. Remaining: Mixcloud client (deferrable), coverage re-run)
+- #18: Gap filling — **in progress** (PR #25: Deezer + GetSongBPM + source tracking; PR #26: Discogs client + label fallback; PR #27: backfill script + config centralization. Remaining: GetSongBPM API key for BPM/key coverage, Mixcloud client (deferrable))
 
-**Next:** Re-run seed validation to measure coverage improvement from gap filling. Mixcloud client can be deferred if coverage gates are met. Then Phase 2 (embeddings).
+**Coverage after backfill (873 tracks):** BPM 37%, key 35%, genre 79%, subgenre 76%, label 84%. Gates not yet met — BPM/key need GetSongBPM API key. Genre/subgenre/label significantly improved by Discogs (638 tracks filled).
+
+**Next:** Get GetSongBPM API key to fill BPM/key gap (~550 tracks). Mixcloud client deferrable. Then Phase 2 (embeddings).
 
 ## Custom skills
 
@@ -147,4 +149,5 @@ After every merge to main, update the following documentation and architecture f
 - **`CLAUDE.md`** — update the "Current state" section with completed issues/PRs and what's next
 - **`ARCHITECTURE_NOTES.md`** (gitignored) — update the "Last updated" line, file tree, module descriptions, and "What doesn't exist yet" section
 - **`docs/PROJECT_PLAN.md`** (gitignored) — no changes needed unless the plan itself changes
+- **`docs/PHASE_<N>_FINDINGS.md`** (gitignored) — update with coverage data, blockers, opportunities when a phase completes or reaches a milestone
 - **Memory files** — update `project_progress.md` to reflect current phase status
