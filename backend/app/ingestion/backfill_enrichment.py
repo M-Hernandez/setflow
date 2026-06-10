@@ -86,8 +86,13 @@ async def backfill_tracks(
     getsongbpm_api_key: str | None,
     discogs_token: str | None,
     dry_run: bool = False,
+    sources: set[str] | None = None,
 ) -> BackfillStats:
-    """Backfill enrichment on all tracks that are missing BPM, key, subgenre, or label."""
+    """Backfill enrichment on all tracks that are missing BPM, key, subgenre, or label.
+
+    sources: set of enabled sources, e.g. {"deezer", "getsongbpm", "discogs"}.
+             None means all sources enabled (default).
+    """
     stats = BackfillStats()
 
     # Find all tracks linked to sets that need enrichment
@@ -101,6 +106,9 @@ async def backfill_tracks(
                 Track.key.is_(None),
                 Track.subgenre.is_(None),
                 Track.label.is_(None),
+                Track.danceability.is_(None),
+                Track.acousticness.is_(None),
+                Track.release_year.is_(None),
             ),
         )
         .order_by(Track.id)
@@ -112,16 +120,23 @@ async def backfill_tracks(
     for i, track in enumerate(tracks, 1):
         changed = False
 
+        run_all = sources is None
+
         # Deezer: ISRC → BPM
-        if track.bpm is None and track.isrc:
+        if (run_all or "deezer" in sources) and track.bpm is None and track.isrc:
             deezer_result = await deezer_lookup_by_isrc(httpx_client, track.isrc)
             if deezer_result and deezer_result.bpm is not None:
                 _apply_deezer_enrichment(track, deezer_result)
                 stats.deezer_filled += 1
                 changed = True
 
-        # GetSongBPM: artist + title → BPM + key
-        if (track.bpm is None or track.key is None) and getsongbpm_api_key:
+        # GetSongBPM: artist + title → BPM, key, danceability, acousticness, year, mbid
+        needs_getsongbpm = (
+            track.bpm is None or track.key is None
+            or track.danceability is None or track.acousticness is None
+            or track.release_year is None
+        )
+        if (run_all or "getsongbpm" in sources) and needs_getsongbpm and getsongbpm_api_key:
             gs_result = await getsongbpm_search(
                 httpx_client, track.artist, track.title, getsongbpm_api_key
             )
@@ -134,7 +149,7 @@ async def backfill_tracks(
                     changed = True
 
         # Discogs: artist + title → genre/subgenre/label
-        if track.genre is None or track.subgenre is None or track.label is None:
+        if (run_all or "discogs" in sources) and (track.genre is None or track.subgenre is None or track.label is None):
             discogs_result = await _discogs_with_backoff(
                 httpx_client, track.artist, track.title, discogs_token
             )
@@ -165,7 +180,7 @@ async def backfill_tracks(
     return stats
 
 
-async def run_backfill(dry_run: bool = False) -> BackfillStats:
+async def run_backfill(dry_run: bool = False, sources: set[str] | None = None) -> BackfillStats:
     """Run the backfill with env-configured API keys."""
     getsongbpm_api_key = settings.getsongbpm_api_key or None
     discogs_token = settings.discogs_token or None
@@ -179,10 +194,14 @@ async def run_backfill(dry_run: bool = False) -> BackfillStats:
         async with async_session() as session:
             async with session.begin():
                 stats = await backfill_tracks(
-                    session, client, getsongbpm_api_key, discogs_token, dry_run
+                    session, client, getsongbpm_api_key, discogs_token, dry_run,
+                    sources=sources,
                 )
 
     return stats
+
+
+VALID_SOURCES = {"deezer", "getsongbpm", "discogs"}
 
 
 def main() -> None:
@@ -194,9 +213,23 @@ def main() -> None:
         action="store_true",
         help="Run enrichment but don't commit changes to DB",
     )
+    parser.add_argument(
+        "--sources",
+        type=str,
+        default=None,
+        help="Comma-separated list of sources to run (deezer,getsongbpm,discogs). Default: all",
+    )
     args = parser.parse_args()
 
-    stats = asyncio.run(run_backfill(dry_run=args.dry_run))
+    sources = None
+    if args.sources:
+        sources = {s.strip().lower() for s in args.sources.split(",")}
+        invalid = sources - VALID_SOURCES
+        if invalid:
+            parser.error(f"Unknown sources: {invalid}. Valid: {VALID_SOURCES}")
+        logger.info("Running only: %s", sources)
+
+    stats = asyncio.run(run_backfill(dry_run=args.dry_run, sources=sources))
 
     print("\n" + "=" * 50)
     print("BACKFILL RESULTS")

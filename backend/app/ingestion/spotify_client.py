@@ -131,7 +131,14 @@ class SpotifyClient:
                 break
             except spotipy.exceptions.SpotifyException as e:
                 if e.http_status == 429:
-                    retry_after = int(e.headers.get("Retry-After", 2 ** attempt))
+                    # When spotipy's internal retries are exhausted, it raises
+                    # with http_status=429 but no headers — the Retry-After
+                    # value is lost. Detect this via "Max Retries" in the msg
+                    # and treat as a hard ban (daily rate limit).
+                    if "Max Retries" in (e.msg or ""):
+                        retry_after = MEDIUM_LIMIT_MAX + 1  # force hard ban
+                    else:
+                        retry_after = int(e.headers.get("Retry-After", 2 ** attempt))
                     self._handle_rate_limit(retry_after)
                     if self._circuit_open:
                         self._cache[query] = None
