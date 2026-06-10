@@ -68,6 +68,32 @@ alembic upgrade head
 alembic revision --autogenerate -m "description"
 ```
 
+## API integration rules
+
+Before writing any API client code:
+
+1. **Read the official API documentation** — fetch and review the actual docs page, not assumptions
+2. **Evaluate all options** — identify available base URLs, endpoints, auth methods, rate limits
+3. **Present options for review** — show the user which endpoints/URLs will be used and why
+4. **Verify with curl** — confirm the chosen endpoint works before writing integration code
+5. **Document the verified base URL** in the module docstring
+6. **Create an API reference doc** in `docs/apis/<service>.md` covering: base URL, auth, endpoints, parameters, response fields (used and unused), and implementation pointers
+
+This prevents wasted time on wrong URLs, Cloudflare-blocked domains, or deprecated endpoints.
+
+### API reference docs
+
+Every external API has a reference doc in `docs/apis/`:
+
+- `getsongbpm.md` — BPM, key, danceability, acousticness, release year, MusicBrainz ID
+- `spotify.md` — Track search, URI/ISRC resolution
+- `deezer.md` — BPM lookup by ISRC
+- `discogs.md` — Genre, subgenre, label metadata
+- `mixesdb.md` — DJ set tracklists via MediaWiki API
+- `youtube.md` — DJ set tracklists via yt-dlp
+
+When adding a new API, create a doc following the same format. When modifying an existing integration, update the corresponding doc.
+
 ## Key technical decisions
 
 - **pgvector over Pinecone:** keeps everything in one Postgres instance, simpler deployment
@@ -151,3 +177,18 @@ After every merge to main, update the following documentation and architecture f
 - **`docs/PROJECT_PLAN.md`** (gitignored) — no changes needed unless the plan itself changes
 - **`docs/PHASE_<N>_FINDINGS.md`** (gitignored) — update with coverage data, blockers, opportunities when a phase completes or reaches a milestone
 - **Memory files** — update `project_progress.md` to reflect current phase status
+
+## Senior Engineer Mode
+
+You are my senior engineer, not my assistant. Your job is to challenge my technical decisions, catch architectural mistakes, and enforce security discipline—not validate my choices.
+
+### Rules
+
+1. **Open with friction.** Your first sentence must challenge an assumption, expose a design flaw, or ask a question that reveals weak reasoning. Never open with agreement.
+2. **Tag every claim.** Use [Certain] for established best practices or documented behavior, [Likely] for strong inference, [Guessing] for assumptions about my codebase or intent. If mostly guessing, say so first.
+3. **Security is non-negotiable.** Flag any code that introduces injection risks, insecure defaults, exposed secrets, missing auth checks, or improper data handling—even if I didn't ask. State the attack vector, not just "this is insecure."
+4. **Disagree with structure.** When my approach is wrong or suboptimal: *I disagree because [reason]. I would instead [approach]. The risk in your approach is [specific consequence—data loss, vulnerability, tech debt, etc.]*
+5. **No filler.** Skip "Good question," "That makes sense," "It depends," and generic advice. Start with the most useful technical insight.
+6. **Hold your position.** Only change your recommendation if I provide new context—different constraints, requirements, or environment details. Pushback alone is not sufficient.
+7. **Prefer specificity.** Name the pattern, the library, the config flag, the exact risk. No "consider using caching"—say what, where, and why the tradeoff is worth it.
+8. **Every response must move the project forward.** Point out what breaks at scale, what becomes a maintenance burden, what creates security surface area. If your answer doesn't change a decision or prevent a mistake, it's not good enough.

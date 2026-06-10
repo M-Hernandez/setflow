@@ -1,8 +1,13 @@
-"""GetSongBPM API lookup: artist + title → BPM + musical key.
+"""GetSongBPM API lookup: artist + title → BPM, key, danceability, acousticness, year.
 
-Two-step API:
-1. Search: GET https://api.getsongbpm.com/search/?api_key={key}&type=song&lookup={title}
-2. Detail: GET https://api.getsongbpm.com/song/?api_key={key}&id={id}
+Verified endpoints (base: https://api.getsong.co):
+- GET /search/?api_key={key}&type=song&lookup={title}  → song search
+- GET /search/?api_key={key}&type=artist&lookup={name}  → artist search
+- GET /song/?api_key={key}&id={id}                      → song detail
+- GET /artist/?api_key={key}&id={id}                     → artist detail (includes similar[])
+
+Song search returns: tempo, key_of, danceability, acousticness, artist.id,
+artist.mbid, album.year. No detail call needed for track enrichment.
 
 Free tier — requires API key + backlink to getsongbpm.com.
 """
@@ -19,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Conservative concurrency for free tier
 _semaphore = asyncio.Semaphore(5)
 
-GETSONGBPM_BASE_URL = "https://api.getsongbpm.com"
+GETSONGBPM_BASE_URL = "https://api.getsong.co"
 
 
 class GetSongBPMMatch(BaseModel):
@@ -27,6 +32,11 @@ class GetSongBPMMatch(BaseModel):
 
     bpm: float | None = None
     key: str | None = None  # Normalized to title case, e.g. "A Minor"
+    danceability: float | None = None  # 0-100 scale
+    acousticness: float | None = None  # 0-100 scale
+    release_year: int | None = None
+    artist_id: str | None = None  # GetSongBPM artist ID for fetching similar artists
+    musicbrainz_id: str | None = None
 
 
 def _normalize_key(raw: str) -> str | None:
@@ -61,29 +71,46 @@ def _normalize_key(raw: str) -> str | None:
     return f"{note} {quality}"
 
 
+def _best_match(results: list[dict], artist: str) -> dict | None:
+    """Pick the result whose artist best matches ours.
+
+    Exact case-insensitive match first, then substring match, then first result.
+    """
+    artist_lower = artist.lower()
+    for r in results:
+        r_artist = (r.get("artist", {}).get("name") or "").lower()
+        if r_artist == artist_lower:
+            return r
+    for r in results:
+        r_artist = (r.get("artist", {}).get("name") or "").lower()
+        if artist_lower in r_artist or r_artist in artist_lower:
+            return r
+    return results[0]
+
+
 async def search(
     client: httpx.AsyncClient,
     artist: str,
     title: str,
     api_key: str,
 ) -> GetSongBPMMatch | None:
-    """Search GetSongBPM for a track by artist + title.
+    """Search GetSongBPM for a track by title, then match artist from results.
 
-    Uses a two-step process: search for song ID, then fetch details.
-    Returns BPM and key if found.
+    The search endpoint returns tempo and key_of directly, so no detail
+    call is needed. Search uses title only because the API's lookup field
+    doesn't handle combined "artist title" queries well.
     """
     if not api_key:
         return None
 
     async with _semaphore:
-        # Step 1: Search for the song
         try:
             search_resp = await client.get(
                 f"{GETSONGBPM_BASE_URL}/search/",
                 params={
                     "api_key": api_key,
                     "type": "song",
-                    "lookup": f"{artist} {title}",
+                    "lookup": title,
                 },
                 timeout=10.0,
             )
@@ -94,7 +121,14 @@ async def search(
             )
             return None
 
-        search_data = search_resp.json()
+        try:
+            search_data = search_resp.json()
+        except (ValueError, UnicodeDecodeError):
+            logger.warning(
+                "GetSongBPM returned non-JSON for '%s - %s'", artist, title
+            )
+            return None
+
         results = search_data.get("search")
 
         if not results or isinstance(results, dict) and "error" in results:
@@ -103,29 +137,13 @@ async def search(
         if not isinstance(results, list) or len(results) == 0:
             return None
 
-        # Take the first result's ID
-        song_id = results[0].get("id")
-        if not song_id:
+        # Match artist from results
+        song = _best_match(results, artist)
+        if not song:
             return None
 
-        # Step 2: Fetch song details for BPM + key
-        try:
-            detail_resp = await client.get(
-                f"{GETSONGBPM_BASE_URL}/song/",
-                params={"api_key": api_key, "id": song_id},
-                timeout=10.0,
-            )
-            detail_resp.raise_for_status()
-        except (httpx.HTTPError, httpx.TimeoutException) as e:
-            logger.warning(
-                "GetSongBPM detail failed for song ID %s: %s", song_id, e
-            )
-            return None
-
-        song_data = detail_resp.json().get("song", {})
-
-        bpm_raw = song_data.get("tempo")
-        key_raw = song_data.get("key_of")
+        bpm_raw = song.get("tempo")
+        key_raw = song.get("key_of")
 
         bpm: float | None = None
         if bpm_raw:
@@ -138,7 +156,42 @@ async def search(
 
         key = _normalize_key(key_raw) if key_raw else None
 
-        if bpm is None and key is None:
+        danceability: float | None = None
+        if song.get("danceability") is not None:
+            try:
+                danceability = float(song["danceability"])
+            except (ValueError, TypeError):
+                pass
+
+        acousticness: float | None = None
+        if song.get("acousticness") is not None:
+            try:
+                acousticness = float(song["acousticness"])
+            except (ValueError, TypeError):
+                pass
+
+        release_year: int | None = None
+        album = song.get("album", {})
+        if album and album.get("year"):
+            try:
+                release_year = int(album["year"])
+            except (ValueError, TypeError):
+                pass
+
+        artist_data = song.get("artist", {})
+        artist_id = artist_data.get("id")
+        mbid = artist_data.get("mbid")
+
+        # Return if we got anything useful
+        if all(v is None for v in [bpm, key, danceability, acousticness, release_year, mbid]):
             return None
 
-        return GetSongBPMMatch(bpm=bpm, key=key)
+        return GetSongBPMMatch(
+            bpm=bpm,
+            key=key,
+            danceability=danceability,
+            acousticness=acousticness,
+            release_year=release_year,
+            artist_id=artist_id,
+            musicbrainz_id=mbid,
+        )

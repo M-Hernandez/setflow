@@ -133,6 +133,16 @@ def _apply_getsongbpm_enrichment(track: Track, gs: GetSongBPMMatch) -> None:
     if gs.key and not track.key:
         track.key = gs.key
         track.key_source = "getsongbpm"
+    if gs.danceability is not None and track.danceability is None:
+        track.danceability = gs.danceability
+    if gs.acousticness is not None and track.acousticness is None:
+        track.acousticness = gs.acousticness
+    if gs.release_year is not None and track.release_year is None:
+        track.release_year = gs.release_year
+    if gs.artist_id and not track.getsongbpm_artist_id:
+        track.getsongbpm_artist_id = gs.artist_id
+    if gs.musicbrainz_id and not track.musicbrainz_id:
+        track.musicbrainz_id = gs.musicbrainz_id
 
 
 def _apply_discogs_enrichment(track: Track, dg: DiscogsMatch) -> None:

@@ -8,9 +8,9 @@ from pydantic import BaseModel
 from app.ingestion.parse_tracklist import ParsedTrack, _LABEL_RE, _REMIX_RE
 
 # Wiki track line: "# [00:08] Artist - Title [Label]"
-# Handles [MM], [MM:SS], [HH:MM:SS], [??], or no bracket at all
+# Handles [MM], [MM:SS], [HH:MM:SS], [??], [0??], [088], or no bracket at all
 _WIKI_TRACK_RE = re.compile(
-    r"^#\s*(?:\[(\d{1,2}(?::\d{2}){0,2}|\?\?)\]\s*)?(.+)$"
+    r"^#\s*(?:\[(\d{1,3}(?::\d{2}){0,2}|\?{2,3}|\d\?{2})\]\s*)?(.+)$"
 )
 
 # Section header for multi-DJ sets: ";Moguai" or ";Alle Farben = [[link]]"
@@ -91,6 +91,9 @@ def parse_wiki_track_line(line: str, position: int) -> ParsedTrack | None:
 
     # Strip embedded timestamp prefixes like "[000:00]" from track text
     remainder = re.sub(r"^\[\d{1,3}:\d{2}\]\s*", "", remainder)
+
+    # Strip track-number prefixes like "[088]", "[0??]", "[???]"
+    remainder = re.sub(r"^\[\d{0,3}\?{0,3}\]\s*", "", remainder)
 
     # Compute timestamp fields
     if ts_raw is None:
