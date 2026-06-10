@@ -77,8 +77,22 @@ Before writing any API client code:
 3. **Present options for review** — show the user which endpoints/URLs will be used and why
 4. **Verify with curl** — confirm the chosen endpoint works before writing integration code
 5. **Document the verified base URL** in the module docstring
+6. **Create an API reference doc** in `docs/apis/<service>.md` covering: base URL, auth, endpoints, parameters, response fields (used and unused), and implementation pointers
 
 This prevents wasted time on wrong URLs, Cloudflare-blocked domains, or deprecated endpoints.
+
+### API reference docs
+
+Every external API has a reference doc in `docs/apis/`:
+
+- `getsongbpm.md` — BPM, key, danceability, acousticness, release year, MusicBrainz ID
+- `spotify.md` — Track search, URI/ISRC resolution
+- `deezer.md` — BPM lookup by ISRC
+- `discogs.md` — Genre, subgenre, label metadata
+- `mixesdb.md` — DJ set tracklists via MediaWiki API
+- `youtube.md` — DJ set tracklists via yt-dlp
+
+When adding a new API, create a doc following the same format. When modifying an existing integration, update the corresponding doc.
 
 ## Key technical decisions
 
