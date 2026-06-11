@@ -104,6 +104,16 @@ class Track(Base):
     musicbrainz_id: Mapped[str | None] = mapped_column(String(36))
     getsongbpm_artist_id: Mapped[str | None] = mapped_column(String(20))
 
+    # 1001tracklists enrichment
+    tracklists_1001_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    apple_music_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    traxsource_id: Mapped[str | None] = mapped_column(String(100))
+    soundcloud_url: Mapped[str | None] = mapped_column(String(500))
+    play_count_1001: Mapped[int | None] = mapped_column(Integer)
+    first_played_1001: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -165,6 +165,31 @@ def _apply_discogs_enrichment(track: Track, dg: DiscogsMatch) -> None:
             track.genre_source = "discogs"
 
 
+def _apply_1001tracklists_enrichment(
+    track: Track, tl: "Tracklists1001Match"
+) -> None:
+    """Apply 1001tracklists metadata to a Track, only filling empty fields."""
+    if not track.tracklists_1001_id:
+        track.tracklists_1001_id = tl.id_track
+    if tl.spotify_uri and not track.spotify_uri:
+        track.spotify_uri = tl.spotify_uri
+    if tl.apple_music_id and not track.apple_music_id:
+        track.apple_music_id = tl.apple_music_id
+    if tl.beatport_id and not track.beatport_id:
+        track.beatport_id = tl.beatport_id
+    if tl.traxsource_id and not track.traxsource_id:
+        track.traxsource_id = tl.traxsource_id
+    if tl.soundcloud_url and not track.soundcloud_url:
+        track.soundcloud_url = tl.soundcloud_url
+    if tl.label_name and not track.label:
+        track.label = tl.label_name
+        track.label_source = "1001tracklists"
+    if tl.play_count is not None and track.play_count_1001 is None:
+        track.play_count_1001 = tl.play_count
+    if tl.first_played is not None and track.first_played_1001 is None:
+        track.first_played_1001 = tl.first_played
+
+
 async def resolve_track(
     session: AsyncSession,
     parsed: ParsedTrack,
